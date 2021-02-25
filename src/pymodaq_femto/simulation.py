@@ -14,8 +14,12 @@ from pypret import FourierTransform, Pulse, PNPS, PulsePlot, lib
 from pypret.graphics import plot_complex, plot_meshdata
 from scipy.interpolate import interp2d
 import numpy as np
-from pymodaq.daq_utils.daq_utils import gauss1D, normalize
+from pymodaq.daq_utils.daq_utils import gauss1D
 
+def normalize(x):
+    x = x - np.min(x)
+    x = x / np.max(x)
+    return x
 
 class MplCanvas(FigureCanvasQTAgg):
     def __init__(self, parent=None, width=5, height=4, dpi=100):

@@ -26,6 +26,7 @@ class MplCanvas(FigureCanvasQTAgg):
         fig = Figure(figsize=(width, height), dpi=dpi)
         super().__init__(fig)
 
+
 class PulsePlot:
 
     def __init__(self, pulse, fig=None, plot=True, **kwargs):
@@ -136,16 +137,17 @@ class MeshDataPlot:
 
 class Simulator(QObject):
     params = [
+            {'title': 'Show Plots', 'name': 'show_plots', 'type': 'action'},
+            #{'title': 'Tight Layout', 'name': 'tight_layout', 'type': 'action'},
             {'title': 'Pulse Source:', 'name': 'pulse_source', 'type': 'list', 'values': ['Simulated', 'From File'],
              },
-            {'title': '', 'name': 'show_pulse', 'type': 'bool_push', 'value': False, 'label': 'Show Pulse'},
-            {'title': '', 'name': 'show_trace', 'type': 'bool_push', 'value': False, 'label': 'Show Trace'},
+
             {'title': 'Pulse Settings:', 'name': 'pulse_settings', 'type': 'group', 'children': [
                 {'title': 'FWHM (fs):', 'name': 'fwhm_time', 'type': 'float', 'value': 5,
                  'tip': 'Fourier Limited Pulse duration in femtoseconds'},
-                {'title': 'GDD (fs2):', 'name': 'GDD_time', 'type': 'float', 'value': 245,
+                {'title': 'GDD (fs2):', 'name': 'GDD', 'type': 'float', 'value': 50,
                  'tip': 'Group Delay Dispersion in femtosecond square'},
-                {'title': 'TOD (fs3):', 'name': 'TOD_time', 'type': 'float', 'value': 100,
+                {'title': 'TOD (fs3):', 'name': 'TOD', 'type': 'float', 'value': 500,
                  'tip': 'Third Order Dispersion in femtosecond cube'},
                 {'title': 'Data File:', 'name': 'data_file_path', 'type': 'browsepath', 'filetype': True,
                  'visible': False,
@@ -165,26 +167,31 @@ class Simulator(QObject):
                 {'title': 'lambda0 (nm):', 'name': 'wl0', 'type': 'float', 'value': 750,
                  'tip': 'Central Wavelength of the Pulse spectrum and frequency grid'},
                 {'title': 'Npoints:', 'name': 'npoints', 'type': 'list', 'values': [2 ** n for n in range(8, 16)],
-                 'value': 512,
+                 'value': 1024,
                  'tip': 'Number of points for the temporal and Fourier Transform Grid'},
                 {'title': 'Time resolution (fs):', 'name': 'time_resolution', 'type': 'float', 'value': 0.5,
                  'tip': 'Time spacing between 2 points in the time grid'},
             ]},
         ]
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, show_ui=True):
         super().__init__()
 
         if parent is None:
             parent = QtWidgets.QWidget()
 
         self.parent = parent
-
+        self.figs = []
 
         self.settings = Parameter.create(name='dataIN_settings', type='group', children=self.params)
-
-        self.setupUI()
         self.settings.sigTreeStateChanged.connect(self.settings_changed)
+
+        if show_ui:
+            self.setupUI()
+            self.settings.child('show_plots').sigActivated.connect(self.show_pulse)
+            self.settings.child('show_plots').sigActivated.connect(self.show_trace)
+        else:
+            self.settings.child('show_plots').hide()
 
     def setupUI(self):
         self.settings_tree = ParameterTree()
@@ -210,6 +217,7 @@ class Simulator(QObject):
         mplotlib_widget.layout().addWidget(self.trace_canvas)
         self.parent.layout().addWidget(mplotlib_widget)
 
+        self.set_tight_layout(True)
 
     def settings_changed(self, param, changes):
         for param, change, data in changes:
@@ -226,26 +234,27 @@ class Simulator(QObject):
                         else:
                             child.show(param.value() != 'From File')
 
-                elif param.name() == 'show_pulse':
-                    param.setValue(False)
-                    self.update_pulse()
-                    self.pulse_canvas.figure.clf()
-                    PulsePlot(self.pulse, self.pulse_canvas.figure)
-                    self.pulse_canvas.draw()
+    def set_tight_layout(self, tight=True):
+        self.pulse_canvas.figure.set_tight_layout(tight)
+        self.trace_canvas.figure.set_tight_layout(tight)
 
-                elif param.name() == 'show_trace':
-                    param.setValue(False)
-                    self.update_pnps()
-                    self.trace_canvas.figure.clf()
-                    MeshDataPlot(self.pnps.trace, self.trace_canvas.figure)
-                    self.trace_canvas.draw()
+    def show_pulse(self):
+        self.update_pulse()
+        self.pulse_canvas.figure.clf()
+        PulsePlot(self.pulse, self.pulse_canvas.figure)
+        self.pulse_canvas.draw()
 
+    def show_trace(self):
+        self.update_pnps()
+        self.trace_canvas.figure.clf()
+        MeshDataPlot(self.pnps.trace, self.trace_canvas.figure)
+        self.trace_canvas.draw()
 
     def update_grid(self):
         Nt = self.settings.child('grid_settings', 'npoints').value()
         dt = self.settings.child('grid_settings', 'time_resolution').value() * 1e-15
         wl0 = self.settings.child('grid_settings', 'wl0').value() * 1e-9
-        self.ft = FourierTransform(Nt, dt=dt, w0=wl2om(-wl0 -300e-9))
+        self.ft = FourierTransform(Nt, dt=dt, w0=wl2om(-wl0 - 300e-9))
 
     def update_pnps(self):
 
@@ -261,21 +270,24 @@ class Simulator(QObject):
     def update_pulse(self):
         self.update_grid()
         wl0 = self.settings.child('grid_settings', 'wl0').value() * 1e-9
+        w0 = convert(wl0, 'wl', 'om')
         pulse = Pulse(self.ft, wl0)
 
         if self.settings.child('pulse_source').value() == 'Simulated':
             fwhm = self.settings.child('pulse_settings', 'fwhm_time').value()
-            GDD = self.settings.child('pulse_settings', 'GDD_time').value()
-            TOD = self.settings.child('pulse_settings', 'TOD_time').value()
+            domega = 4*np.log(2) / fwhm
+            GDD = self.settings.child('pulse_settings', 'GDD').value()
+            TOD = self.settings.child('pulse_settings', 'TOD').value()
 
-            pulse.field = gauss1D(pulse.t, x0=0, dx=0.5 * (fwhm * 1e-15) / np.sqrt(np.log(2.0)))
-            pulse.spectrum = (pulse.spectrum) * np.exp(
+            pulse.spectrum = gauss1D(pulse.w, x0=w0, dx=domega * 1e15)
+            #pulse.field = gauss1D(pulse.t, x0=0, dx=fwhm * 1e-15)
+            pulse.spectrum = pulse.spectrum * np.exp(
                 1j * (GDD * 1e-30) * ((pulse.w - pulse.w0) ** 2) / 2 + 1j * (TOD * 1e-45) * (
                         (pulse.w - pulse.w0) ** 3) / 6)
 
-            # recenter pulse in time domain
-            idx = np.argmax(pulse.intensity)
-            pulse.spectrum = pulse.spectrum * np.exp(-1j * pulse.t[idx] * (pulse.w - pulse.w0))
+            # # recenter pulse in time domain
+            # idx = np.argmax(pulse.intensity)
+            # pulse.spectrum = pulse.spectrum * np.exp(-1j * pulse.t[idx] * (pulse.w - pulse.w0))
 
         else:
             data_path = self.settings.child('pulse_settings', 'data_file_path').value()
@@ -298,7 +310,7 @@ def main():
     app = QtWidgets.QApplication(sys.argv)
     win = QtWidgets.QWidget()
     win.setWindowTitle('PyMoDAQ Femto Simulator')
-    prog = Simulator(win)
+    prog = Simulator(win, show_ui=True)
 
     win.show()
 

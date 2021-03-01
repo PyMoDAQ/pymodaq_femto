@@ -15,6 +15,12 @@ from pypret.graphics import plot_complex, plot_meshdata
 from scipy.interpolate import interp2d
 import numpy as np
 from pymodaq.daq_utils.daq_utils import gauss1D
+from pypret.pnps import _PNPS_CLASSES
+
+methods = list(_PNPS_CLASSES.keys())
+methods.pop(methods.index('dscan'))
+methods.sort()
+nlprocesses = list(_PNPS_CLASSES[methods[0]].keys())
 
 def normalize(x):
     x = x - np.min(x)
@@ -137,8 +143,9 @@ class MeshDataPlot:
 
 class Simulator(QObject):
     params = [
-            {'title': 'Show Plots', 'name': 'show_plots', 'type': 'action'},
-            #{'title': 'Tight Layout', 'name': 'tight_layout', 'type': 'action'},
+            {'title': 'Show Pulse', 'name': 'show_pulse', 'type': 'action', 'visible': False},
+            {'title': 'Show Trace', 'name': 'show_trace', 'type': 'action', 'visible': False},
+            {'title': 'Show both', 'name': 'show_plots', 'type': 'action', 'visible': False},
             {'title': 'Pulse Source:', 'name': 'pulse_source', 'type': 'list', 'values': ['Simulated', 'From File'],
              },
 
@@ -157,10 +164,10 @@ class Simulator(QObject):
             ]},
             {'title': 'Algorithm Options:', 'name': 'algo', 'type': 'group', 'children': [
                 {'title': 'Method:', 'name': 'method', 'type': 'list',
-                 'values': ['frog', 'tdp', 'dscan', 'miips', 'ifrog'],
+                 'values': methods,
                  'tip': 'Characterization Method'},
                 {'title': 'NL process:', 'name': 'nlprocess', 'type': 'list',
-                 'values': ['shg', 'thg', 'sd', 'pg', 'tg'],
+                 'values': nlprocesses,
                  'tip': 'Non Linear process used in the experiment'},
             ]},
             {'title': 'Grid settings:', 'name': 'grid_settings', 'type': 'group', 'children': [
@@ -182,6 +189,9 @@ class Simulator(QObject):
 
         self.parent = parent
         self.figs = []
+        self.pnps = None
+        self.max_pnps =1
+        self.pulse = None
 
         self.settings = Parameter.create(name='dataIN_settings', type='group', children=self.params)
         self.settings.sigTreeStateChanged.connect(self.settings_changed)
@@ -189,9 +199,28 @@ class Simulator(QObject):
         if show_ui:
             self.setupUI()
             self.settings.child('show_plots').sigActivated.connect(self.show_pulse)
+            self.settings.child('show_plots').show()
+            self.settings.child('show_pulse').show()
+            self.settings.child('show_trace').show()
             self.settings.child('show_plots').sigActivated.connect(self.show_trace)
+            self.settings.child('show_trace').sigActivated.connect(self.show_trace)
+            self.settings.child('show_pulse').sigActivated.connect(self.show_pulse)
         else:
             self.settings.child('show_plots').hide()
+            self.settings.child('show_pulse').hide()
+            self.settings.child('show_trace').hide()
+
+        self.update_pulse()
+        self.update_pnps()
+
+    @property
+    def trace(self):
+        return self.pnps.trace
+
+    @property
+    def parameter(self):
+        return self.pnps.parameter
+
 
     def setupUI(self):
         self.settings_tree = ParameterTree()
@@ -233,6 +262,8 @@ class Simulator(QObject):
                             child.show(param.value() == 'From File')
                         else:
                             child.show(param.value() != 'From File')
+                elif param.name() == 'method':
+                    self.settings.child('algo', 'nlprocess').setLimits(list(_PNPS_CLASSES[param.value()].keys()))
 
     def set_tight_layout(self, tight=True):
         self.pulse_canvas.figure.set_tight_layout(tight)

@@ -10,11 +10,11 @@ from pathlib import Path
 from pyqtgraph.parametertree import Parameter, ParameterTree
 from pymodaq.daq_utils.parameter import pymodaq_ptypes
 from pypret.frequencies import om2wl, wl2om, convert
-from pypret import FourierTransform, Pulse, PNPS, PulsePlot, lib
+from pypret import FourierTransform, Pulse, PNPS, PulsePlot, lib, MeshData
 from pypret.graphics import plot_complex, plot_meshdata
 from scipy.interpolate import interp2d
 import numpy as np
-from pymodaq.daq_utils.daq_utils import gauss1D
+from pymodaq.daq_utils.daq_utils import gauss1D, my_moment
 from pypret.pnps import _PNPS_CLASSES
 
 methods = list(_PNPS_CLASSES.keys())
@@ -113,6 +113,26 @@ class PulsePlot:
         #     plt.show()
 
 
+def plot_meshdata(ax, md, cmap="nipy_spectral", width_factor=6):
+    x0, dx = my_moment(md.axes[1], np.sum(md.data, 0))
+    y0, dy = my_moment(md.axes[0], np.sum(md.data, 1))
+    x, y = lib.edges(md.axes[1]), lib.edges(md.axes[0])
+    indx1 = np.argwhere(x >= x0-width_factor*dx)[0][0]
+    indx2 = np.argwhere(x >= x0 + width_factor*dx)[0][0]
+    indy1 = np.argwhere(y <= y0 + width_factor*dy)[0][0]
+    indy2 = np.argwhere(y <= y0 - width_factor*dy)[0][0]
+
+    im = ax.pcolormesh(x[indx1:indx2+1], y[indy1:indy2+1], normalize(md.data[indy1:indy2+1, indx1:indx2+1]), cmap=cmap)
+    ax.set_xlabel(md.labels[1])
+    ax.set_ylabel(md.labels[0])
+
+    fx = EngFormatter(unit=md.units[1])
+    ax.xaxis.set_major_formatter(fx)
+    fy = EngFormatter(unit=md.units[0])
+    ax.yaxis.set_major_formatter(fy)
+    return im
+
+
 class MeshDataPlot:
 
     def __init__(self, mesh_data, fig=None, plot=True, **kwargs):
@@ -121,7 +141,7 @@ class MeshDataPlot:
         if plot:
             self.plot(**kwargs)
 
-    def plot(self, show=True):
+    def plot(self, show=True, **kwargs):
         md = self.md
         if self.fig is None:
             fig, ax = plt.subplots()
@@ -129,7 +149,7 @@ class MeshDataPlot:
             fig = self.fig
             ax = self.fig.subplots(nrows=1, ncols=1)
             
-        im = plot_meshdata(ax, md, "nipy_spectral")
+        im = plot_meshdata(ax, md, "nipy_spectral", **kwargs)
         fig.colorbar(im, ax=ax)
 
         self.fig, self.ax = fig, ax
@@ -190,7 +210,7 @@ class Simulator(QObject):
         self.parent = parent
         self.figs = []
         self.pnps = None
-        self.max_pnps =1
+        self.max_pnps = 1
         self.pulse = None
 
         self.settings = Parameter.create(name='dataIN_settings', type='group', children=self.params)
@@ -212,6 +232,28 @@ class Simulator(QObject):
 
         self.update_pulse()
         self.update_pnps()
+
+    @property
+    def trace_exp(self):
+        """ Experimental trace on linear wavelength grid of the simulated trace
+
+        Returns
+        -------
+        meshdata: (MeshData)
+        """
+        width_factor = 6
+        w, y = lib.edges(self.pnps.trace.axes[1]), lib.edges(self.pnps.trace.axes[0])
+        x0, dx = my_moment(self.pnps.trace.axes[1], np.sum(self.pnps.trace.data, 0))
+        y0, dy = my_moment(self.pnps.trace.axes[0], np.sum(self.pnps.trace.data, 1))
+        indx1 = np.argwhere(self.pnps.trace.axes[1] >= x0 - width_factor * dx)[0][0]
+        indx2 = np.argwhere(self.pnps.trace.axes[1] >= x0 + width_factor * dx)[0][0]
+
+        wl = self.pnps.wl[indx1:indx2]
+        new_wl = np.linspace(np.min(wl), np.max(wl), 256)
+        new_w = convert(new_wl, 'wl', 'om')
+        new_data = interp2d(self.pnps.trace.axes[1][indx1:indx2], y, self.pnps.trace.data[indx1:indx2, :])(new_w, y)
+
+        return MeshData(new_data, self.pnps.trace.axes[0], new_wl * 1e9,)
 
     @property
     def trace(self):
@@ -310,11 +352,12 @@ class Simulator(QObject):
             GDD = self.settings.child('pulse_settings', 'GDD').value()
             TOD = self.settings.child('pulse_settings', 'TOD').value()
 
-            pulse.spectrum = gauss1D(pulse.w, x0=w0, dx=domega * 1e15)
+            pulse.spectrum = gauss1D(pulse.w, x0=0., dx=domega * 1e15)  # x0=0 because the frequency axis is already
+            # centered on wl0 (see Pulse(self.ft, wl0))
             #pulse.field = gauss1D(pulse.t, x0=0, dx=fwhm * 1e-15)
             pulse.spectrum = pulse.spectrum * np.exp(
-                1j * (GDD * 1e-30) * ((pulse.w - pulse.w0) ** 2) / 2 + 1j * (TOD * 1e-45) * (
-                        (pulse.w - pulse.w0) ** 3) / 6)
+                1j * (GDD * 1e-30) * ((pulse.w) ** 2) / 2 + 1j * (TOD * 1e-45) * (
+                        (pulse.w) ** 3) / 6)
 
             # # recenter pulse in time domain
             # idx = np.argmax(pulse.intensity)

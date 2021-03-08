@@ -21,20 +21,23 @@ from pypret import FourierTransform, Pulse, PNPS, PulsePlot, lib, MeshData
 from pypret.frequencies import om2wl, wl2om, convert
 import scipy
 from scipy.fftpack import next_fast_len
-from pymodaq.daq_utils.h5modules import H5Backend
+from pymodaq.daq_utils.h5modules import H5BrowserUtil
+from types import SimpleNamespace
+from pyqtgraph.graphicsItems.GradientEditorItem import Gradients
+
 config = utils.load_config()
 logger = utils.set_logger(utils.get_module_name(__file__))
 
-
 class DataIn(OrderedDict):
-    def __init__(self, name='', source='', pnps=None, **kwargs):
+    def __init__(self, name='', source='', trace_in=None, pulse_in=None, **kwargs):
         """class subclassing from OrderedDict defining data to be processed by the retriever, either experimental or
         simulated
         Parameters
         ----------
         name: (str) data identifier
         source: (str) either "simulated" or "experimental"
-        pnps: (Pnps) Pnps object as defined in pypret and containing data for retrieval
+        trace_in: (MeshData) MeshData object as defined in pypret and containing the trace data
+        pulse_in: (Pulse) Pulse object as defined in pypret and containing fundamental spectrum (at least)
         """
         if not isinstance(name, str):
             raise TypeError('name for the DataIn class should be a string')
@@ -45,7 +48,8 @@ class DataIn(OrderedDict):
             raise ValueError('Invalid "source" for the DataIn class')
         self['source'] = source
 
-        self['pnps'] = pnps
+        self['trace_in'] = trace_in
+        self['pulse_in'] = pulse_in
 
         for k in kwargs:
             self[k] = kwargs[k]
@@ -70,9 +74,7 @@ def pulse_from_spectrum(wavelength, spectrum, pulse=None):
         ft = FourierTransform(N, dw=dw)
         pulse = Pulse(ft, w0, unit="om")
     # interpolate
-    pulse.spectrum = scipy.interpolate.interp1d(w - pulse.w0, spectrum,
-                                                bounds_error=False,
-                                                fill_value=0.0)(pulse.w)
+    pulse.spectrum = scipy.interpolate.interp1d(w - pulse.w0, spectrum, bounds_error=False, fill_value=0.0)(pulse.w)
     return pulse
 
 
@@ -83,7 +85,31 @@ class RetrieverUI(QObject):
     """
     status_signal = pyqtSignal(str)
 
-    params = []
+    params_in = [
+        {'title': 'Data Info', 'name': 'data_in_info', 'type': 'group', 'children': [
+            {'title': 'Trace Info', 'name': 'trace_in_info', 'type': 'group', 'children': [
+                {'title': 'Wl0 (nm)', 'name': 'wl0', 'type': 'float', 'value': 0, 'readonly': True,
+                 'tip': 'Central spectrum wavelength in nanometers'},
+                {'title': 'FWHM (nm)', 'name': 'wl_fwhm', 'type': 'float', 'value': 0, 'readonly': True,
+                 'tip': 'FWHM of the spectrum in nanometers'},
+                {'title': 'Param Size', 'name': 'trace_param_size', 'type': 'int', 'value': 0, 'readonly': True},
+                {'title': 'Wavelentgh Size', 'name': 'trace_wl_size', 'type': 'int', 'value': 0, 'readonly': True},
+                {'title': 'Scaling (m)', 'name': 'wl_scaling', 'type': 'float', 'value': 1e-9, 'readonly': False,
+                 'tip': 'Scaling to go from the Trace wavelength values to wavelength in meters'},
+                {'title': 'Scaling (s)', 'name': 'param_scaling', 'type': 'float', 'value': 1e-15, 'readonly': False,
+                 'tip': 'Scaling to go from the trace parameter values to delay in seconds'},
+            ]},
+            {'title': 'Spectrum Info', 'name': 'spectrum_in_info', 'type': 'group', 'children': [
+                {'title': 'Wl0 (nm)', 'name': 'wl0', 'type': 'float', 'value': 0, 'readonly': True,
+                 'tip': 'Central spectrum wavelength in nanometers'},
+                {'title': 'FWHM (nm)', 'name': 'wl_fwhm', 'type': 'float', 'value': 0, 'readonly': True,
+                 'tip': 'FWHM of the spectrum in nanometers'},
+                {'title': 'Wavelength Size', 'name': 'spectrum_size', 'type': 'int', 'value': 0, 'readonly': True},
+                {'title': 'Scaling (m)', 'name': 'wl_scaling', 'type': 'float', 'value': 1e-9, 'readonly': False,
+                 'tip': 'Scaling to go from the spectrum wavelength values to wavelength in meters'},
+            ]},
+        ]},
+    ]
 
     def __init__(self, dockarea=None, dashboard=None):
         """
@@ -97,16 +123,21 @@ class RetrieverUI(QObject):
         logger.info('Initializing Retriever Extension')
         super().__init__()
 
-        self.h5backend = H5Backend()
+        self.h5browse = H5BrowserUtil()
 
         self.dockarea = dockarea
         self.dashboard = dashboard
         self.mainwindow = self.dockarea.parent()
 
+        self.settings_data_in = Parameter.create(name='dataIN_settings', type='group', children=self.params_in)
+
         self.setupUI()
         self.create_menu(self.mainwindow.menuBar())
 
+
+
         self.simulator = None
+        self.data_in = None
 
     def create_menu(self, menubar):
         """
@@ -160,7 +191,7 @@ class RetrieverUI(QObject):
         self.dockarea.addDock(self.ui.dock_data_in, 'top')
 
         self.ui.dock_retriever = Dock('Retriever')
-        self.dockarea.addDock(self.ui.dock_retriever, 'below', self.ui.dock_data_in)
+        self.dockarea.addDock(self.ui.dock_retriever, 'bottom', self.ui.dock_data_in)
 
         self.ui.dock_retrieved_trace = Dock('Retrieved Trace')
         self.dockarea.addDock(self.ui.dock_retrieved_trace, 'below', self.ui.dock_retriever)
@@ -191,6 +222,8 @@ class RetrieverUI(QObject):
         self.data_in_toolbar.addAction(self.load_from_simulation_action)
         data_in_splitter = QtWidgets.QSplitter()
         self.viewer_trace_in = Viewer2D()
+        self.viewer_trace_in.ui.histogram_red.gradient.restoreState(Gradients['femto'])
+        self.viewer_trace_in.aspect_ratio_action.click()
         self.viewer_spectrum_in = Viewer1D()
         self.settings_data_in_tree = ParameterTree()
         self.settings_data_in_tree.setMinimumWidth(300)
@@ -201,10 +234,6 @@ class RetrieverUI(QObject):
         self.ui.dock_data_in.addWidget(self.data_in_toolbar)
         self.ui.dock_data_in.addWidget(data_in_splitter)
 
-        params = [
-
-            ]
-        self.settings_data_in = Parameter.create(name='dataIN_settings', type='group', children=params)
         self.settings_data_in_tree.setParameters(self.settings_data_in, showTop=False)
         self.settings_data_in.sigTreeStateChanged.connect(self.data_in_settings_changed)
 
@@ -212,6 +241,7 @@ class RetrieverUI(QObject):
         # setup retriever dock
         retriever_widget = QtWidgets.QSplitter()
         self.viewer_live_trace = Viewer2D()
+        self.viewer_live_trace.ui.histogram_red.gradient.restoreState(Gradients['femto'])
         self.viewer_error = Viewer0D()
         self.settings_retriever_tree = ParameterTree()
         self.settings_retriever_tree.setMinimumWidth(300)
@@ -236,23 +266,42 @@ class RetrieverUI(QObject):
 
     def load_from_simulator(self):
         if self.simulator is not None:
-            self.data_in = DataIn(name='data_in', source='simulated', pnps=self.simulator.pnps)
+            self.data_in = DataIn(name='data_in', source='simulated', trace_in=self.simulator.trace_exp,
+                                  pulse_in=self.simulator.pulse)
             self.display_data_in()
 
     def get_axes_from_trace_node(self, fname, node_path):
-        h5file = self.h5backend.open_file(fname)
-        self.h5backend.get_children(node_path.parent)
-
+        h5file = self.h5browse.open_file(fname)
+        data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
+        self.h5browse.close_file()
+        return axes['x_axis'], axes['nav_00']
 
     def load_trace_in(self):
         try:
             data, fname, node_path = browse_data(ret_all=True, message='Select the node corresponding to the'
                                                                        'Charaterization Trace')
-            M, N = data.shape
-            
-            dparameter = self.get_axes_from_trace_node(fname, node_path)
-            trace = MeshData(data)
-            self.data_in = DataIn(name='data_in', source='experimental')
+            if fname is not None:
+                wl, parameter_axis = self.get_axes_from_trace_node(fname, node_path)
+                wl0, fwhm = utils.my_moment(wl['data'], np.sum(data, 0))
+
+
+                self.settings_data_in.child('data_in_info', 'trace_in_info', 'wl0').setValue(wl0 * 1e9)
+                self.settings_data_in.child('data_in_info', 'trace_in_info', 'wl_fwhm').setValue(fwhm * 1e9)
+
+                self.settings_data_in.child('data_in_info', 'trace_in_info', 'trace_param_size').setValue(
+                    len(parameter_axis['data']))
+                self.settings_data_in.child('data_in_info', 'trace_in_info', 'trace_wl_size').setValue(len(wl['data']))
+
+                trace_in = MeshData(data, parameter_axis['data'], wl['data'],
+                                         labels=[parameter_axis['label'], wl['label']],
+                                         units=[parameter_axis['units'], wl['units']])
+
+                dt = np.mean(np.diff(parameter_axis['data']))
+
+                ft = FourierTransform(len(parameter_axis['data']), dt)
+                self.data_in = DataIn(name='data_in', source='experimental', trace_in=trace_in, pulse_in=Pulse(ft, 2*wl0))
+
+                self.display_trace_in()
 
         except Exception as e:
             logger.exception(str(e))
@@ -260,38 +309,49 @@ class RetrieverUI(QObject):
 
     def load_spectrum_in(self):
         data, fname, node_path = browse_data(ret_all=True, message='Select the node corresponding to the'
-                                                                   'Charaterization Trace')
+                                                                   'Fundamental Spectrum')
+        if fname is not None:
+            h5file = self.h5browse.open_file(fname)
+            data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
+            self.h5browse.close_file()
+
+            wl0, fwhm = utils.my_moment(axes['x_axis']['data'], data)
+            self.settings_data_in.child('data_in_info', 'spectrum_in_info', 'wl0').setValue(wl0)
+            self.settings_data_in.child('data_in_info', 'spectrum_in_info', 'wl_fwhm').setValue(fwhm)
+            self.settings_data_in.child('data_in_info', 'spectrum_in_info', 'spectrum_size').setValue(len(data))
+
+            self.data_in['pulse_in'] = pulse_from_spectrum(axes['x_axis']['data'], data, pulse=self.data_in['pulse_in'])
+            self.display_pulse_in()
+
+    def display_trace_in(self):
+        max_data = np.max(self.data_in['trace_in'].data)
+
+        self.viewer_trace_in.setImage(utils.normalize(self.data_in['trace_in'].data/max_data))
+        self.viewer_trace_in.x_axis = utils.Axis(data=(self.data_in['trace_in'].axes[1]),
+                                                 units=self.data_in['trace_in'].units[1],
+                                                 label=self.data_in['trace_in'].labels[1])
+        self.viewer_trace_in.y_axis = utils.Axis(data=(self.data_in['trace_in'].axes[0]),
+                                                 units=self.data_in['trace_in'].units[0],
+                                                 label=self.data_in['trace_in'].labels[0])
+    def display_pulse_in(self):
+        self.viewer_spectrum_in.show_data([utils.normalize(lib.abs2(self.data_in['pulse_in'].spectrum))],
+                                      x_axis=utils.Axis(data=self.data_in['pulse_in'].wl, units='m',
+                                                        label='Wavelength'),
+                                          labels=['Spectrum'])
 
     def display_data_in(self):
-        max_pnps = np.max(self.data_in['pnps'].Tmn)
+        self.display_trace_in()
+        self.display_pulse_in()
 
-        self.viewer_trace_in.setImage(utils.normalize(self.data_in['pnps'].trace.data/max_pnps))
-        self.viewer_trace_in.x_axis = utils.Axis(data=(self.data_in['pnps'].w+self.data_in['pnps'].w0),
-                                                       units='Hz', label='Frequency')
-        self.viewer_trace_in.y_axis = utils.Axis(data=self.data_in['pnps'].parameter,
-                                                 units=self.data_in['pnps'].parameter_unit,
-                                                 label=utils.capitalize(self.data_in['pnps'].parameter_name))
-        self.viewer_spectrum_in.show_data([utils.normalize(lib.abs2(self.data_in['pnps'].spectrum))],
-                                          x_axis=utils.Axis(
-                                              data=convert(self.data_in['pnps'].w + self.data_in['pnps'].w0,
-                                                           "om", "wl"),
-                                              units='nm', label='Wavelength'),
-                                          labels=['Spectrum'])
 
 
     def data_in_settings_changed(self, param, changes):
         for param, change, data in changes:
-            path = self.settings.childPath(param)
-            if path is not None:
-                childName = '.'.join(path)
-            else:
-                childName = param.name()
             if change == 'childAdded':
                 pass
 
             elif change == 'value':
-                if param.name() == 'scan_average':
-                    self.show_average_dock(param.value() > 1)
+                pass
 
             elif change == 'parent':
                 pass

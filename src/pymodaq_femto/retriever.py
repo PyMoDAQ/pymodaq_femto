@@ -266,7 +266,7 @@ class RetrieverUI(QObject):
 
     def load_from_simulator(self):
         if self.simulator is not None:
-            self.data_in = DataIn(name='data_in', source='simulated', trace_in=self.simulator.trace_exp,
+            self.data_in = DataIn(name='data_in', source='simulated', trace_in=self.simulator.trace_exp(),
                                   pulse_in=self.simulator.pulse)
             self.display_data_in()
             self.update_spectrum_info(self.data_in['pulse_in'])

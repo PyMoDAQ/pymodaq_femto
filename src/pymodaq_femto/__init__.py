@@ -5,7 +5,7 @@ from collections import OrderedDict
 # #### including dscan
 from pypret.pnps import _PNPS_CLASSES
 _PNPS_CLASSES.pop('dscan')
-from pymodaq_femto.dscan import DSCAN
+from pymodaq_femto.pnps import DSCAN
 # ############
 
 try:

@@ -14,8 +14,9 @@ from pypret import FourierTransform, Pulse, PNPS, PulsePlot, lib, MeshData
 from pypret.graphics import plot_complex, plot_meshdata
 from scipy.interpolate import interp2d
 import numpy as np
-from pymodaq.daq_utils.daq_utils import gauss1D, my_moment, l2w, linspace_step
-from pymodaq.daq_utils.array_manipulation import linspace_this_image, crop_vector_to_axis, crop_array_to_axis
+from pymodaq.daq_utils.daq_utils import gauss1D, my_moment, l2w, linspace_step, Axis
+from pymodaq.daq_utils.array_manipulation import linspace_this_image, crop_vector_to_axis, crop_array_to_axis,\
+    linspace_this_vect
 from pypret.material import BK7
 from pymodaq_femto.materials import FS_extended
 from collections import OrderedDict
@@ -367,6 +368,15 @@ class Simulator(QObject):
                       limit=self.settings.child('plot_settings', 'autolimits').value())
         self.pulse_canvas.draw()
 
+    def spectrum_exp(self, Npts=512, wl_lim=None):
+        spectrum = normalize(lib.abs2(self.pulse.spectrum))
+        wl = self.pulse.wl
+        if wl_lim is not None:
+            wl, spectrum = crop_vector_to_axis(wl, spectrum, wl_lim)
+        wl_lin, spectrum_lin = linspace_this_vect(wl[::-1], spectrum[::-1], Npts)
+
+        return Axis(data=wl_lin, label='Wavelength', units='m'), spectrum_lin
+
     def trace_exp(self, threshold=None, Npts=512, wl_lim=None):
         """ Experimental trace on linear wavelength grid of the simulated trace
         Parameters
@@ -396,7 +406,8 @@ class Simulator(QObject):
             md.axes[1] = wl_lin
             # md.data = trace_croped.T
             # md.axes[1] = wlc
-        return md
+        return md.data, Axis(data=md.axes[1], label=md.labels[1], units=md.units[1]),\
+               Axis(data=md.axes[0], label=md.labels[0], units=md.units[0])
 
     def get_trace_wl(self, md, Npts=512):
         wl = l2w(md.axes[1] * 1e-15) * 1e-9

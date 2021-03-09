@@ -14,13 +14,21 @@ from pypret import FourierTransform, Pulse, PNPS, PulsePlot, lib, MeshData
 from pypret.graphics import plot_complex, plot_meshdata
 from scipy.interpolate import interp2d
 import numpy as np
-from pymodaq.daq_utils.daq_utils import gauss1D, my_moment
-from pypret.pnps import _PNPS_CLASSES
+from pymodaq.daq_utils.daq_utils import gauss1D, my_moment, l2w, linspace_step
+from pymodaq.daq_utils.array_manipulation import linspace_this_image, crop_vector_to_axis, crop_array_to_axis
+from pypret.material import BK7
+from pymodaq_femto.materials import FS_extended
+from collections import OrderedDict
+from pymodaq_femto import _PNPS_CLASSES
 
-methods = list(_PNPS_CLASSES.keys())
-methods.pop(methods.index('dscan'))
-methods.sort()
+
+
+methods_tmp = list(_PNPS_CLASSES.keys())
+methods_tmp.sort()
+methods = ['frog']
+methods.extend(methods_tmp)
 nlprocesses = list(_PNPS_CLASSES[methods[0]].keys())
+materials = OrderedDict(FS=FS_extended, BK7=BK7)
 
 def normalize(x):
     x = x - np.min(x)
@@ -113,24 +121,7 @@ class PulsePlot:
         #     plt.show()
 
 
-def plot_meshdata(ax, md, cmap="nipy_spectral", width_factor=6):
-    x0, dx = my_moment(md.axes[1], np.sum(md.data, 0))
-    y0, dy = my_moment(md.axes[0], np.sum(md.data, 1))
-    x, y = lib.edges(md.axes[1]), lib.edges(md.axes[0])
-    indx1 = np.argwhere(x >= x0-width_factor*dx)[0][0]
-    indx2 = np.argwhere(x >= x0 + width_factor*dx)[0][0]
-    indy1 = np.argwhere(y <= y0 + width_factor*dy)[0][0]
-    indy2 = np.argwhere(y <= y0 - width_factor*dy)[0][0]
 
-    im = ax.pcolormesh(x[indx1:indx2+1], y[indy1:indy2+1], normalize(md.data[indy1:indy2+1, indx1:indx2+1]), cmap=cmap)
-    ax.set_xlabel(md.labels[1])
-    ax.set_ylabel(md.labels[0])
-
-    fx = EngFormatter(unit=md.units[1])
-    ax.xaxis.set_major_formatter(fx)
-    fy = EngFormatter(unit=md.units[0])
-    ax.yaxis.set_major_formatter(fy)
-    return im
 
 
 class MeshDataPlot:
@@ -189,6 +180,31 @@ class Simulator(QObject):
                 {'title': 'NL process:', 'name': 'nlprocess', 'type': 'list',
                  'values': nlprocesses,
                  'tip': 'Non Linear process used in the experiment'},
+                {'title': 'Alpha (rad):', 'name': 'alpha', 'type': 'float', 'value': 1,
+                 'tip': 'amplitude of the phase pattern (in rad)', 'visible': False},
+                {'title': 'Gamma (Hz):', 'name': 'gamma', 'type': 'float', 'value': 10,
+                 'tip': 'frequency of the phase pattern (in Hz)', 'visible': False},
+                {'title': 'Material:', 'name': 'material', 'type': 'list',
+                 'values': list(materials.keys()), 'visible': False,
+                 'tip': 'Material used for the Dscan measurement'},
+                {'title': 'Dscan Parameter Scan:', 'name': 'dscan_parameter', 'type': 'group', 'visible': False,
+                 'children': [
+                     {'title': 'Insertion min (mm):', 'name': 'min', 'type': 'float', 'value': -10.,
+                      'tip': 'Minimum of the scanned parameter in mm'},
+                     {'title': 'Insertion max (mm):', 'name': 'max', 'type': 'float', 'value': 10.,
+                      'tip': 'Minimum of the scanned parameter in mm'},
+                     {'title': 'Insertion step (mm):', 'name': 'step', 'type': 'float', 'value': 0.025,
+                      'tip': 'Step size of the scanned parameter in mm'},
+                 ]},
+                {'title': 'MIIPS Parameter Scan:', 'name': 'miips_parameter', 'type': 'group', 'visible': False,
+                 'children': [
+                     {'title': 'Phase min (rad):', 'name': 'min', 'type': 'float', 'value': 0,
+                      'tip': 'Minimum of the scanned parameter in radians'},
+                     {'title': 'Phase max (rad):', 'name': 'max', 'type': 'float', 'value': 2 * np.pi,
+                      'tip': 'Minimum of the scanned parameter in radian'},
+                     {'title': 'Phase setp (rad):', 'name': 'step', 'type': 'float', 'value': 2 * np.pi / 100,
+                      'tip': 'Step size of the scanned parameter in radians'},
+                 ]},
             ]},
             {'title': 'Grid settings:', 'name': 'grid_settings', 'type': 'group', 'children': [
                 {'title': 'lambda0 (nm):', 'name': 'wl0', 'type': 'float', 'value': 750,
@@ -198,6 +214,23 @@ class Simulator(QObject):
                  'tip': 'Number of points for the temporal and Fourier Transform Grid'},
                 {'title': 'Time resolution (fs):', 'name': 'time_resolution', 'type': 'float', 'value': 0.5,
                  'tip': 'Time spacing between 2 points in the time grid'},
+            ]},
+            {'title': 'Plot settings:', 'name': 'plot_settings', 'type': 'group', 'children': [
+                {'title': 'Units:', 'name': 'units', 'type': 'list', 'values': ['nm', 'Hz'],
+                 'tip': 'Plot ad a function of the wavelength (in nm) or as a function of the angular frequency (in Hz)'},
+                {'title': 'Autolimits?:', 'name': 'autolimits', 'type': 'bool', 'value': True,
+                 'tip': 'Restrict the data plot to limits given from marginals and threshold'},
+                {'title': 'Set Limits?:', 'name': 'setlimits', 'type': 'bool', 'value': False,
+                 'tip': 'Restrict the data plot to limits given from marginals and threshold'},
+                {'title': 'Autolimits Threshold:', 'name': 'autolim_thresh', 'type': 'float', 'value': 1e-2,
+                 'tip': 'Threshold for the determination of the plotting limits'},
+                {'title': 'Limit min:', 'name': 'limit_min', 'type': 'float', 'value': 500,
+                 'tip': 'Min  value of the frequency axis for plotting (Hz or nm)', 'visible': False},
+                {'title': 'Limit max:', 'name': 'limit_max', 'type': 'float', 'value': 1100,
+                 'tip': 'Max  value of the frequency axis for plotting (Hz or nm)', 'visible': False},
+                {'title': 'Npts:', 'name': 'Npts', 'type': 'list',
+                 'values': [2 ** n for n in range(8, 16)], 'value': 512,
+                 'tip': 'Number of points to display the frequency axis'},
             ]},
         ]
 
@@ -233,27 +266,8 @@ class Simulator(QObject):
         self.update_pulse()
         self.update_pnps()
 
-    @property
-    def trace_exp(self):
-        """ Experimental trace on linear wavelength grid of the simulated trace
 
-        Returns
-        -------
-        meshdata: (MeshData)
-        """
-        width_factor = 6
-        w, y = lib.edges(self.pnps.trace.axes[1]), lib.edges(self.pnps.trace.axes[0])
-        x0, dx = my_moment(self.pnps.trace.axes[1], np.sum(self.pnps.trace.data, 0))
-        y0, dy = my_moment(self.pnps.trace.axes[0], np.sum(self.pnps.trace.data, 1))
-        indx1 = np.argwhere(self.pnps.trace.axes[1] >= x0 - width_factor * dx)[0][0]
-        indx2 = np.argwhere(self.pnps.trace.axes[1] >= x0 + width_factor * dx)[0][0]
 
-        wl = self.pnps.wl[indx1:indx2]
-        new_wl = np.linspace(np.min(wl), np.max(wl), 256)
-        new_w = convert(new_wl, 'wl', 'om')
-        new_data = interp2d(self.pnps.trace.axes[1][indx1:indx2], y, self.pnps.trace.data[indx1:indx2, :])(new_w, y)
-
-        return MeshData(new_data, self.pnps.trace.axes[0], new_wl * 1e9,)
 
     @property
     def trace(self):
@@ -304,8 +318,39 @@ class Simulator(QObject):
                             child.show(param.value() == 'From File')
                         else:
                             child.show(param.value() != 'From File')
+
+                elif param.name() == 'autolimits':
+                    if param.value():
+                        self.settings.child('plot_settings', 'autolim_thresh').show()
+                        self.settings.child('plot_settings', 'limit_min').hide()
+                        self.settings.child('plot_settings', 'limit_max').hide()
+                        self.settings.child('plot_settings', 'setlimits').setValue(False)
+
+                elif param.name() == 'setlimits':
+                    if param.value():
+                        self.settings.child('plot_settings', 'autolim_thresh').hide()
+                        self.settings.child('plot_settings', 'limit_min').show()
+                        self.settings.child('plot_settings', 'limit_max').show()
+                        self.settings.child('plot_settings', 'autolimits').setValue(False)
+
                 elif param.name() == 'method':
                     self.settings.child('algo', 'nlprocess').setLimits(list(_PNPS_CLASSES[param.value()].keys()))
+
+                    if param.value() == 'miips':
+                        self.settings.child('algo', 'alpha').show()
+                        self.settings.child('algo', 'gamma').show()
+                        self.settings.child('algo', 'miips_parameter').show()
+                    else:
+                        self.settings.child('algo', 'alpha').hide()
+                        self.settings.child('algo', 'gamma').hide()
+                        self.settings.child('algo', 'miips_parameter').hide()
+
+                    if param.value() == 'dscan':
+                        self.settings.child('algo', 'material').show()
+                        self.settings.child('algo', 'dscan_parameter').show()
+                    else:
+                        self.settings.child('algo', 'material').hide()
+                        self.settings.child('algo', 'dscan_parameter').hide()
 
     def set_tight_layout(self, tight=True):
         self.pulse_canvas.figure.set_tight_layout(tight)
@@ -314,13 +359,80 @@ class Simulator(QObject):
     def show_pulse(self):
         self.update_pulse()
         self.pulse_canvas.figure.clf()
-        PulsePlot(self.pulse, self.pulse_canvas.figure)
+        if self.settings.child('plot_settings', 'units').value() == 'nm':
+            PulsePlot(self.pulse, self.pulse_canvas.figure, xaxis='wavelength',
+                      limit=self.settings.child('plot_settings', 'autolimits').value())
+        else:
+            PulsePlot(self.pulse, self.pulse_canvas.figure, xaxis='frequency',
+                      limit=self.settings.child('plot_settings', 'autolimits').value())
         self.pulse_canvas.draw()
+
+    def trace_exp(self, threshold=None, Npts=512, wl_lim=None):
+        """ Experimental trace on linear wavelength grid of the simulated trace
+        Parameters
+        ----------
+        threshold: (None or float)
+        Npts: (int)
+        wl_lim: (None or list of 2 floats)
+
+        Returns
+        -------
+        meshdata: (MeshData)
+        """
+        md = self.pnps.trace.copy()
+        md.normalize()
+        md = self.get_trace_wl(md, Npts)
+        md.axes[0] = md.axes[0][::-1]
+        md.data = md.data[::-1, :]
+
+        if threshold is not None:
+            md.autolimit(threshold=threshold)
+        elif wl_lim is not None:
+            delay_c, wlc, trace_croped = crop_array_to_axis(md.axes[0], md.axes[1], md.data.T,
+                                                   (np.min(md.axes[0]), np.max(md.axes[0]), wl_lim[0], wl_lim[1]))
+            wl_lin, data_wl = linspace_this_image(wlc, trace_croped.T, axis=1,
+                                                   Npts=Npts)
+            md.data = data_wl
+            md.axes[1] = wl_lin
+            # md.data = trace_croped.T
+            # md.axes[1] = wlc
+        return md
+
+    def get_trace_wl(self, md, Npts=512):
+        wl = l2w(md.axes[1] * 1e-15) * 1e-9
+        wl_lin, data_wl = linspace_this_image(wl[::-1], md.data[:, ::-1], axis=1,
+                                              Npts=Npts)
+        md = MeshData(data_wl, *[md.axes[0], wl_lin], uncertainty=md.uncertainty,
+                      labels=[md.labels[0], 'Wavelength'], units=[md.units[0], 'm'])
+        return md
 
     def show_trace(self):
         self.update_pnps()
         self.trace_canvas.figure.clf()
-        MeshDataPlot(self.pnps.trace, self.trace_canvas.figure)
+        md = self.pnps.trace.copy()
+        md.normalize()
+        Npts = self.settings.child('plot_settings', 'Npts').value()
+        if self.settings.child('plot_settings', 'units').value() == 'nm':
+            md = self.get_trace_wl(md, Npts=Npts)
+
+        if self.settings.child('plot_settings', 'autolimits').value():
+            md.autolimit(threshold=self.settings.child('plot_settings', 'autolim_thresh').value())
+
+        if self.settings.child('plot_settings', 'setlimits').value():
+            lims = np.array([self.settings.child('plot_settings', 'limit_min').value(),
+                             self.settings.child('plot_settings', 'limit_max').value()])
+            if self.settings.child('plot_settings', 'units').value() == 'nm':
+                lims *= 1e-9
+            else:
+                lims *= 1e15
+            delay_c, xc, trace_croped = crop_array_to_axis(md.axes[0], md.axes[1], md.data.T,
+                                                            (np.min(md.axes[0]), np.max(md.axes[0]), lims[0],
+                                                             lims[1]))
+            xlin, data_line = linspace_this_image(xc, trace_croped.T, axis=1, Npts=Npts)
+            md.data = data_line
+            md.axes[1] = xlin
+
+        MeshDataPlot(md, self.trace_canvas.figure)
         self.trace_canvas.draw()
 
     def update_grid(self):
@@ -334,8 +446,24 @@ class Simulator(QObject):
         pulse = self.update_pulse()
         method = self.settings.child('algo', 'method').value()
         process = self.settings.child('algo', 'nlprocess').value()
-        self.pnps = PNPS(pulse, method, process)
-        parameter = np.linspace(self.ft.t[-1], self.ft.t[0], len(self.ft.t))
+
+        if method == 'dscan':
+            material = materials[self.settings.child('algo', 'material').value()]
+            self.pnps = PNPS(pulse, method, process, material=material)
+            parameter = linspace_step(self.settings.child('algo', 'dscan_parameter', 'min').value(),
+                                      self.settings.child('algo', 'dscan_parameter', 'max').value(),
+                                      self.settings.child('algo', 'dscan_parameter', 'step').value())
+            parameter *= 1e-3
+        elif method == 'miips':
+            alpha = self.settings.child('algo', 'alpha').value()
+            gamma = self.settings.child('algo', 'gamma').value()
+            self.pnps = PNPS(pulse, method, process, alpha=alpha, gamma=gamma)
+            parameter = linspace_step(self.settings.child('algo', 'miips_parameter', 'min').value(),
+                                      self.settings.child('algo', 'miips_parameter', 'max').value(),
+                                      self.settings.child('algo', 'miips_parameter', 'step').value())
+        else:
+            self.pnps = PNPS(pulse, method, process)
+            parameter = np.linspace(self.ft.t[-1], self.ft.t[0], len(self.ft.t))
         self.pnps.calculate(pulse.spectrum, parameter)
         self.max_pnps = np.max(self.pnps.Tmn)
         return self.pnps

@@ -269,6 +269,24 @@ class RetrieverUI(QObject):
             self.data_in = DataIn(name='data_in', source='simulated', trace_in=self.simulator.trace_exp,
                                   pulse_in=self.simulator.pulse)
             self.display_data_in()
+            self.update_spectrum_info(self.data_in['pulse_in'])
+            self.update_trace_info(self.data_in['trace_in'])
+
+    def update_spectrum_info(self, pulse):
+            wl0, fwhm = utils.my_moment(pulse.wl, pulse.spectrum)
+            self.settings_data_in.child('data_in_info', 'spectrum_in_info', 'wl0').setValue(wl0 * 1e9)
+            self.settings_data_in.child('data_in_info', 'spectrum_in_info', 'wl_fwhm').setValue(fwhm * 1e9)
+            self.settings_data_in.child('data_in_info', 'spectrum_in_info',
+                                        'spectrum_size').setValue(len(pulse.spectrum))
+
+    def update_trace_info(self, md):
+        wl0, fwhm = utils.my_moment(md.axes[1], np.sum(md.data, 0))
+        self.settings_data_in.child('data_in_info', 'trace_in_info', 'wl0').setValue(wl0 * 1e9)
+        self.settings_data_in.child('data_in_info', 'trace_in_info', 'wl_fwhm').setValue(fwhm * 1e9)
+
+        self.settings_data_in.child('data_in_info', 'trace_in_info', 'trace_param_size').setValue(
+            len(md.axes[0]))
+        self.settings_data_in.child('data_in_info', 'trace_in_info', 'trace_wl_size').setValue(len(md.axes[1]))
 
     def get_axes_from_trace_node(self, fname, node_path):
         h5file = self.h5browse.open_file(fname)
@@ -282,24 +300,22 @@ class RetrieverUI(QObject):
                                                                        'Charaterization Trace')
             if fname is not None:
                 wl, parameter_axis = self.get_axes_from_trace_node(fname, node_path)
-                wl0, fwhm = utils.my_moment(wl['data'], np.sum(data, 0))
+                scaling_parameter = self.settings_data_in.child('data_in_info',
+                                                                'trace_in_info', 'param_scaling').value()
+                scaling_wl = self.settings_data_in.child('data_in_info', 'trace_in_info', 'wl_scaling').value()
 
-
-                self.settings_data_in.child('data_in_info', 'trace_in_info', 'wl0').setValue(wl0 * 1e9)
-                self.settings_data_in.child('data_in_info', 'trace_in_info', 'wl_fwhm').setValue(fwhm * 1e9)
-
-                self.settings_data_in.child('data_in_info', 'trace_in_info', 'trace_param_size').setValue(
-                    len(parameter_axis['data']))
-                self.settings_data_in.child('data_in_info', 'trace_in_info', 'trace_wl_size').setValue(len(wl['data']))
-
-                trace_in = MeshData(data, parameter_axis['data'], wl['data'],
+                trace_in = MeshData(data, parameter_axis['data'] * scaling_parameter, wl['data'] * scaling_wl,
                                          labels=[parameter_axis['label'], wl['label']],
-                                         units=[parameter_axis['units'], wl['units']])
+                                         units=['s', 'm'])
+                self.update_trace_info(trace_in)
 
-                dt = np.mean(np.diff(parameter_axis['data']))
-
-                ft = FourierTransform(len(parameter_axis['data']), dt)
-                self.data_in = DataIn(name='data_in', source='experimental', trace_in=trace_in, pulse_in=Pulse(ft, 2*wl0))
+                dt = np.mean(np.diff(parameter_axis['data'])) * scaling_parameter
+                wl0 = self.settings_data_in.child('data_in_info', 'trace_in_info', 'wl0').value() * 1e-9
+                ft = FourierTransform(len(parameter_axis['data']), dt, w0=wl2om(-wl0 - 300e-9))
+                self.data_in = DataIn(name='data_in', source='experimental', trace_in=trace_in,
+                                      pulse_in=Pulse(ft, self.settings_data_in.child('data_in_info',
+                                                                                       'trace_in_info',
+                                                                                       'wl0').value() * scaling_wl))
 
                 self.display_trace_in()
 
@@ -315,18 +331,12 @@ class RetrieverUI(QObject):
             data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
             self.h5browse.close_file()
 
-            wl0, fwhm = utils.my_moment(axes['x_axis']['data'], data)
-            self.settings_data_in.child('data_in_info', 'spectrum_in_info', 'wl0').setValue(wl0)
-            self.settings_data_in.child('data_in_info', 'spectrum_in_info', 'wl_fwhm').setValue(fwhm)
-            self.settings_data_in.child('data_in_info', 'spectrum_in_info', 'spectrum_size').setValue(len(data))
-
             self.data_in['pulse_in'] = pulse_from_spectrum(axes['x_axis']['data'], data, pulse=self.data_in['pulse_in'])
+            self.update_spectrum_info(self.data_in['pulse_in'])
             self.display_pulse_in()
 
     def display_trace_in(self):
-        max_data = np.max(self.data_in['trace_in'].data)
-
-        self.viewer_trace_in.setImage(utils.normalize(self.data_in['trace_in'].data/max_data))
+        self.viewer_trace_in.setImage(self.data_in['trace_in'].data)
         self.viewer_trace_in.x_axis = utils.Axis(data=(self.data_in['trace_in'].axes[1]),
                                                  units=self.data_in['trace_in'].units[1],
                                                  label=self.data_in['trace_in'].labels[1])

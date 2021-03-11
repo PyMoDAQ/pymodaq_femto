@@ -15,15 +15,16 @@ from pymodaq.daq_utils.h5modules import browse_data
 from pymodaq.daq_utils.plotting.viewer2D.viewer2D_main import Viewer2D
 from pymodaq.daq_utils.plotting.viewer1D.viewer1D_main import Viewer1D
 from pymodaq.daq_utils.plotting.viewer0D.viewer0D_main import Viewer0D
-from pymodaq_femto.simulation import Simulator, methods, MplCanvas, NavigationToolbar, MeshDataPlot
+from pymodaq_femto.simulation import Simulator, methods, MplCanvas, NavigationToolbar, MeshDataPlot, nlprocesses, \
+    PulsePlot
 from collections import OrderedDict
-from pypret import FourierTransform, Pulse, PNPS, PulsePlot, lib, MeshData
+from pypret import FourierTransform, Pulse, PNPS, lib, MeshData
 from pypret.frequencies import om2wl, wl2om, convert
 import scipy
 from scipy.fftpack import next_fast_len
 from pymodaq.daq_utils.h5modules import H5BrowserUtil
-from types import SimpleNamespace
 from pyqtgraph.graphicsItems.GradientEditorItem import Gradients
+from pymodaq_femto import _PNPS_CLASSES
 
 config = utils.load_config()
 logger = utils.set_logger(utils.get_module_name(__file__))
@@ -96,6 +97,23 @@ def preprocess(trace, signal_range=None, dark_signal_range=None):
     trace.normalize()
     return trace
 
+# interpolate the measurement
+def preprocess2(trace, pnps):
+    if trace.units[1] == "m":
+        # scaled in wavelength -> has to be corrected
+        wavelength = trace.axes[1]
+        frequency = convert(wavelength, "wl", "om")
+        trace.scale(wavelength * wavelength)
+        trace.normalize()
+        trace.axes[1] = frequency
+        trace.units[1] = "Hz"
+    trace.interpolate(axis2=pnps.process_w)
+
+
+def mask(x, y, where, **kwargs):
+    y = scipy.interpolate.interp1d(x[~where], y[~where], **kwargs)(x)
+    return y
+
 
 class Retriever(QObject):
     """
@@ -107,6 +125,9 @@ class Retriever(QObject):
         {'title': 'Data Info', 'name': 'data_in_info', 'type': 'group', 'children': [
             {'title': 'Trace type:', 'name': 'trace_type', 'type': 'list', 'values': methods,
              'tip': 'Characterization technique used to obtain this trace'},
+            {'title': 'NL process:', 'name': 'nlprocess', 'type': 'list',
+             'values': nlprocesses,
+             'tip': 'Non Linear process used in the experiment'},
             {'title': 'Trace Info', 'name': 'trace_in_info', 'type': 'group', 'children': [
                 {'title': 'Wl0 (nm)', 'name': 'wl0', 'type': 'float', 'value': 0, 'readonly': True,
                  'tip': 'Central spectrum wavelength in nanometers'},
@@ -140,8 +161,19 @@ class Retriever(QObject):
                 {'title': 'height:', 'name': 'height', 'type': 'int', 'value': 10, 'min': 1},
             ]},
             {'title': 'Process trace', 'name': 'process_trace', 'type': 'action',
-             'tip': 'Use ROIs to select dark counts from the trace in order to remove them and use ROISelect to'
-                    ' reduce the area around the trace'},
+             'tip': 'Use one ROI to select a frequency area from the trace in order to remove the background'
+                    ' and use ROISelect to reduce the area around the trace'},
+            {'title': 'Process Spectrum', 'name': 'process_spectrum', 'type': 'action',
+             'tip': 'Use ROIs to select frequency areas from the spectrum that should be removed'},
+            {'title': 'Grid settings:', 'name': 'grid_settings', 'type': 'group', 'children': [
+                {'title': 'lambda0 (nm):', 'name': 'wl0', 'type': 'float', 'value': 750,
+                 'tip': 'Central Wavelength of the Pulse spectrum and frequency grid'},
+                {'title': 'Npoints:', 'name': 'npoints', 'type': 'list', 'values': [2 ** n for n in range(8, 16)],
+                 'value': 1024,
+                 'tip': 'Number of points for the temporal and Fourier Transform Grid'},
+                {'title': 'Time resolution (fs):', 'name': 'time_resolution', 'type': 'float', 'value': 0.5,
+                 'tip': 'Time spacing between 2 points in the time grid'},
+            ]},
         ]},
     ]
 
@@ -164,12 +196,15 @@ class Retriever(QObject):
         self.mainwindow = self.dockarea.parent()
 
         self.settings_data_in = Parameter.create(name='dataIN_settings', type='group', children=self.params_in)
+        self.settings_data_in.sigTreeStateChanged.connect(self.settings_in_changed)
 
         self.setupUI()
         self.create_menu(self.mainwindow.menuBar())
         self.simulator = None
         self.data_in = None
+        self.ft = None
         self.settings_data_in.child('processing', 'process_trace').sigActivated.connect(self.process_trace)
+        self.settings_data_in.child('processing', 'process_spectrum').sigActivated.connect(self.process_spectrum)
 
         self.viewer_trace_in.ROI_select_signal.connect(self.update_ROI)
         self.viewer_trace_in.ROIselect_action.triggered.connect(self.show_ROI)
@@ -191,7 +226,17 @@ class Retriever(QObject):
         self.data_in_menu.addAction(self.load_trace_in_action)
         self.data_in_menu.addAction(self.gen_trace_in_action)
 
-
+    def settings_in_changed(self, param, changes):
+        for param, change, data in changes:
+            path = self.settings_data_in.childPath(param)
+            if change == 'childAdded':
+                pass
+            elif change == 'parent':
+                pass
+            elif change == 'value':
+                if param.name() == 'method':
+                    self.settings_data_in.child('algo',
+                                                'nlprocess').setLimits(list(_PNPS_CLASSES[param.value()].keys()))
 
     def quit_fun(self):
         """
@@ -357,7 +402,25 @@ class Retriever(QObject):
 
         self.settings_data_in.child('data_in_info', 'trace_in_info', 'trace_param_size').setValue(
             len(raw_trace['parameter_axis']))
-        self.settings_data_in.child('data_in_info', 'trace_in_info', 'trace_wl_size').setValue(len(raw_trace['axis']))
+        self.settings_data_in.child('data_in_info', 'trace_in_info',
+                                    'trace_wl_size').setValue(len(raw_trace['axis']['data']))
+
+        self.settings_data_in.child('processing', 'grid_settings', 'wl0').setValue(wl0 * 1e9)
+        self.settings_data_in.child('processing', 'grid_settings',
+                                    'npoints').setValue(len(raw_trace['parameter_axis']['data']))
+
+        method = self.settings_data_in.child('data_in_info', 'trace_type').value()
+        if not (method == 'dscan' or method == 'miips'):
+            self.settings_data_in.child('processing', 'grid_settings',
+                                        'time_resolution').setValue(np.mean(
+                np.diff(raw_trace['parameter_axis']['data'])) * 1e15)
+
+    def generate_ft_grid(self):
+        wl0 = self.settings_data_in.child('processing', 'grid_settings', 'wl0').value() * 1e-9
+        Npts = self.settings_data_in.child('processing', 'grid_settings', 'npoints').value()
+        dt = self.settings_data_in.child('processing', 'grid_settings', 'time_resolution').value() * 1e-15
+        self.ft = FourierTransform(Npts, dt, w0=wl2om(-wl0 - 300e-9))
+
 
     def process_trace(self):
         trace_in = self.get_trace_in()
@@ -381,8 +444,27 @@ class Retriever(QObject):
             xlim, ylim = self.viewer_trace_in.scale_axis(xlim_pxls, ylim_pxls)
             trace_in = preprocess(trace_in, signal_range=(tuple(ylim), tuple(xlim)))
 
+        self.data_in['trace_in'] = trace_in
+
         self.trace_canvas.figure.clf()
         MeshDataPlot(trace_in, self.trace_canvas.figure)
+        self.trace_canvas.draw()
+
+    def process_spectrum(self):
+        self.generate_ft_grid()
+        wl0 = self.settings_data_in.child('processing', 'grid_settings', 'wl0').value() * 1e-9
+        spectrum = self.data_in['raw_spectrum']['data']
+        wavelength = self.data_in['raw_spectrum']['axis']['data']
+        self.data_in['pulse_in'] = Pulse(self.ft, wl0)
+
+        for roi in self.viewer_spectrum_in.roi_manager.ROIs:
+            range = self.viewer_spectrum_in.roi_manager.ROIs[roi].pos()
+            spectrum = mask(wavelength, spectrum, (range[0] <= wavelength) & (wavelength <= range[1]))
+
+        self.data_in['pulse_in'] = pulse_from_spectrum(wavelength, spectrum, pulse=self.data_in['pulse_in'])
+
+        self.pulse_canvas.figure.clf()
+        PulsePlot(self.data_in['pulse_in'])
         self.trace_canvas.draw()
 
     @pyqtSlot(QtCore.QRectF)
@@ -415,7 +497,13 @@ class Retriever(QObject):
                                             self.data_in['raw_trace']['parameter_axis']['data'],
                                             self.data_in['raw_trace']['axis']['data'],
                                             labels=[label, "wavelength"], units=[unit, "m"])
+
         return self.data_in['trace_in']
+
+    def get_pulse_in(self):
+
+        self.data_in['pulse_in'] = pulse_from_spectrum(self.data_in['raw_spectrum']['axis']['data'],
+                                                       self.data_in['raw_spectrum']['data'])
 
 
     def get_axes_from_trace_node(self, fname, node_path):
@@ -471,21 +559,28 @@ class Retriever(QObject):
         except Exception as e:
             logger.exception(str(e))
 
-
-    def load_spectrum_in(self):
-        data, fname, node_path = browse_data(ret_all=True, message='Select the node corresponding to the'
-                                                                   'Fundamental Spectrum')
-        if fname != '':
+    def load_spectrum_in(self, fname=None, node_path=None):
+        if fname is not None and node_path is not None:
             h5file = self.h5browse.open_file(fname)
             data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
             self.h5browse.close_file()
-            if self.data_in is None:
-                self.data_in = DataIn(source='experimental')
-            self.data_in.update(dict(raw_spectrum={'data': data, 'axis': axes['x_axis']}))
 
-            #self.data_in['pulse_in'] = pulse_from_spectrum(axes['x_axis']['data'], data, pulse=self.data_in['pulse_in'])
-            self.update_spectrum_info(self.data_in['raw_spectrum'])
-            self.display_spectrum_in()
+        else:
+            data, fname, node_path = browse_data(ret_all=True, message='Select the node corresponding to the'
+                                                                   'Fundamental Spectrum')
+            if fname != '':
+                h5file = self.h5browse.open_file(fname)
+                data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
+                self.h5browse.close_file()
+            else:
+                return
+
+        if self.data_in is None:
+            self.data_in = DataIn(source='experimental')
+        self.data_in.update(dict(raw_spectrum={'data': data, 'axis': axes['x_axis']}))
+
+        self.update_spectrum_info(self.data_in['raw_spectrum'])
+        self.display_spectrum_in()
 
     def display_trace_in(self):
         self.viewer_trace_in.setImage(self.data_in['raw_trace']['data'])
@@ -526,6 +621,9 @@ def main():
     win.show()
     prog.load_trace_in(fname='C:\\Data\\2021\\20210309\\Dataset_20210309_000\\Dataset_20210309_000.h5',
                         node_path='/Raw_datas/Scan000/Detector000/Data1D/Ch000/Data')
+    prog.load_spectrum_in(fname='C:\\Users\\weber\\Desktop\\pulse.h5',
+                        node_path='/Raw_datas/Detector000/Data1D/Ch000/Data')
+
     sys.exit(app.exec_())
 
 

@@ -4,20 +4,25 @@ import subprocess
 import logging
 from pathlib import Path
 import numpy as np
+from types import SimpleNamespace
+import io
+from contextlib import redirect_stdout
 from PyQt5 import QtGui, QtWidgets, QtCore
 from PyQt5.QtCore import Qt, QObject, pyqtSlot, QThread, pyqtSignal, QLocale
 from PyQt5.QtGui import QIcon, QPixmap
+from PyQt5.QtGui import QTextCursor
 from pyqtgraph.dockarea import Dock
 from pyqtgraph.parametertree import Parameter, ParameterTree
 from pymodaq.daq_utils import daq_utils as utils
 from pymodaq.daq_utils import gui_utils as gutils
+from pymodaq.daq_utils.parameter import utils as putils
 from pymodaq.daq_utils.h5modules import browse_data
 from pymodaq.daq_utils.plotting.viewer2D.viewer2D_main import Viewer2D
 from pymodaq.daq_utils.plotting.viewer1D.viewer1D_main import Viewer1D
 from pymodaq.daq_utils.plotting.viewer0D.viewer0D_main import Viewer0D
-from pymodaq_femto.simulation import Simulator, methods, MplCanvas, NavigationToolbar, MeshDataPlot, nlprocesses, \
-    PulsePlot
-from pymodaq_femto.result_graphics import RetrievalResultPlot
+from pymodaq.daq_utils.managers.roi_manager import LinearROI
+from pymodaq_femto.graphics import RetrievalResultPlot, MplCanvas, NavigationToolbar, MeshDataPlot, PulsePlot
+from pymodaq_femto.simulation import Simulator, methods, nlprocesses
 from collections import OrderedDict
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
 from pypret.frequencies import om2wl, wl2om, convert
@@ -90,7 +95,7 @@ def pulse_from_spectrum(wavelength, spectrum, pulse=None):
 def preprocess(trace, signal_range=None, dark_signal_range=None):
     if dark_signal_range is not None:
         dark_signal = trace.copy()
-        dark_signal.limit(dark_signal_range, axis=1)
+        dark_signal.limit(dark_signal_range, axes=1)
         dark_signal = np.median(dark_signal.data, axis=1)
     if signal_range is not None:
         trace.limit(*signal_range)
@@ -113,7 +118,13 @@ def preprocess2(trace, pnps):
         trace.units[1] = "Hz"
     trace.interpolate(axis2=pnps.process_w)
 
-
+def substract_linear_phase(pulse):
+    phase = np.unwrap(np.angle(pulse.spectrum))
+    z = np.polyfit(pulse.w, phase, 1)
+    pulse.spectrum *= np.exp(- 1j * np.poly1d(z)(pulse.w))
+    return pulse
+    
+    
 def mask(x, y, where, **kwargs):
     y = scipy.interpolate.interp1d(x[~where], y[~where], **kwargs)(x)
     return y
@@ -124,7 +135,7 @@ class Retriever(QObject):
     Main class initializing a DAQ_Scan module with its dashboard and scanning control panel
     """
     status_signal = pyqtSignal(str)
-
+    retriever_signal = pyqtSignal(str)
     params_in = [
         {'title': 'Data Info', 'name': 'data_in_info', 'type': 'group', 'children': [
             {'title': 'Trace type:', 'name': 'trace_type', 'type': 'list', 'values': methods,
@@ -167,33 +178,47 @@ class Retriever(QObject):
                 {'title': 'Time resolution (fs):', 'name': 'time_resolution', 'type': 'float', 'value': 0.5,
                  'tip': 'Time spacing between 2 points in the time grid'},
             ]},
-            {'title': 'Trace limits:', 'name': 'ROIselect', 'type': 'group', 'visible': False, 'children': [
+            {'title': 'Trace limits:', 'name': 'ROIselect', 'type': 'group', 'visible': True, 'children': [
+                {'title': 'Crop Trace?:', 'name': 'crop_trace', 'type': 'bool', 'value': False},
                 {'title': 'x0:', 'name': 'x0', 'type': 'int', 'value': 0, 'min': 0},
                 {'title': 'y0:', 'name': 'y0', 'type': 'int', 'value': 0, 'min': 0},
                 {'title': 'width:', 'name': 'width', 'type': 'int', 'value': 10, 'min': 1},
                 {'title': 'height:', 'name': 'height', 'type': 'int', 'value': 10, 'min': 1},
             ]},
+            {'title': 'Substract background:', 'name': 'linearselect', 'type': 'group', 'visible': True, 'children': [
+                {'title': 'Substract?:', 'name': 'dosubstract', 'type': 'bool', 'value': False},
+                {'title': 'wl0:', 'name': 'wl0', 'type': 'float', 'value': 0.},
+                {'title': 'wl1:', 'name': 'wl1', 'type': 'float', 'value': 10.},
+            ]},
+            {'title': 'Process Spectrum', 'name': 'process_spectrum', 'type': 'action',
+             'tip': 'Use ROIs to select frequency areas from the spectrum that should be removed'},
             {'title': 'Process trace', 'name': 'process_trace', 'type': 'action',
              'tip': 'Use one ROI to select a frequency area from the trace in order to remove the background'
                     ' and use ROISelect to reduce the area around the trace'},
-            {'title': 'Process Spectrum', 'name': 'process_spectrum', 'type': 'action',
-             'tip': 'Use ROIs to select frequency areas from the spectrum that should be removed'},
+
             {'title': 'Process Both', 'name': 'process_both', 'type': 'action',
              'tip': 'Process both the trace and the spectrum'},
-
         ]},
-    ]
+        {'title': 'Retrieving', 'name': 'retrieving', 'type': 'group', 'children': [
+            {'title': 'Algo type:', 'name': 'algo_type', 'type': 'list', 'values': retriever_algos,
+             'tip': 'Retriever Algorithm'},
+            {'title': 'Verbose Info:', 'name': 'verbose', 'type': 'bool', 'value': True,
+             'tip': 'Display infos during retrieval'},
+            {'title': 'Max iteration:', 'name': 'max_iter', 'type': 'int', 'value': 30,
+             'tip': 'Max iteration for the algorithm'},
+            {'title': 'Initial Pulse Guess', 'name': 'pulse_guess', 'type': 'group', 'children': [
+                {'title': 'FWHM (fs):', 'name': 'fwhm', 'type': 'float', 'value': 100,
+                 'tip': 'Guess of the pulse duration (used as a starting point)'},
+                {'title': 'Phase amp. (rad):', 'name': 'phase_amp', 'type': 'float', 'value': 0.1,
+                 'tip': 'Amplitude of the random phase applied to the initial guess'},
+            ]},
 
-    params_retriever = [
-        {'title': 'Algo type:', 'name': 'algo_type', 'type': 'list', 'values': retriever_algos,
-         'tip': 'Retriever Algorithm'},
-        {'title': 'Verbose Info:', 'name': 'verbose', 'type': 'bool', 'value': True,
-         'tip': 'Display infos during retrieval'},
-        {'title': 'Max iteration:', 'name': 'max_iter', 'type': 'int', 'value': 30,
-         'tip': 'Max iteration for the algorithm'},
-        {'title': 'Start Retrieval', 'name': 'start', 'type': 'action',
-         'tip': 'Start the retrieval process'},
-           ]
+            {'title': 'Start Retrieval', 'name': 'start', 'type': 'action',
+             'tip': 'Start the retrieval process'},
+            {'title': 'Stop Retrieval', 'name': 'stop', 'type': 'action',
+             'tip': 'Stop the retrieval process'},
+           ]},
+    ]
 
     def __init__(self, dockarea=None, dashboard=None):
         """
@@ -213,12 +238,8 @@ class Retriever(QObject):
         self.dashboard = dashboard
         self.mainwindow = self.dockarea.parent()
 
-        self.settings_data_in = Parameter.create(name='dataIN_settings', type='group', children=self.params_in)
-        self.settings_data_in.sigTreeStateChanged.connect(self.settings_in_changed)
-
-        self.settings_retriever = Parameter.create(name='retriever_settings', type='group',
-                                                   children=self.params_retriever)
-        self.settings_retriever.sigTreeStateChanged.connect(self.settings_retriever_changed)
+        self.settings = Parameter.create(name='dataIN_settings', type='group', children=self.params_in)
+        self.settings.sigTreeStateChanged.connect(self.settings_changed)
 
         self.setupUI()
         self.create_menu(self.mainwindow.menuBar())
@@ -227,13 +248,16 @@ class Retriever(QObject):
         self.ft = None
         self.retriever = None
         self.pnps = None
-        self.settings_data_in.child('processing', 'process_trace').sigActivated.connect(self.process_trace)
-        self.settings_data_in.child('processing', 'process_spectrum').sigActivated.connect(self.process_spectrum)
-        self.settings_data_in.child('processing', 'process_both').sigActivated.connect(self.process_both)
-        self.settings_retriever.child('start').sigActivated.connect(self.start_retriever)
+        self.retriever_thread = None
+        self.settings.child('processing', 'process_trace').sigActivated.connect(self.process_trace)
+        self.settings.child('processing', 'process_spectrum').sigActivated.connect(self.process_spectrum)
+        self.settings.child('processing', 'process_both').sigActivated.connect(self.process_both)
+        self.settings.child('retrieving', 'start').sigActivated.connect(self.start_retriever)
+        self.settings.child('retrieving', 'stop').sigActivated.connect(self.stop_retriever)
 
         self.viewer_trace_in.ROI_select_signal.connect(self.update_ROI)
         self.viewer_trace_in.ROIselect_action.triggered.connect(self.show_ROI)
+
 
     def create_menu(self, menubar):
         """
@@ -250,30 +274,62 @@ class Retriever(QObject):
 
         self.data_in_menu = menubar.addMenu('Data In')
         self.data_in_menu.addAction(self.load_trace_in_action)
+        self.data_in_menu.addAction(self.load_spectrum_in_action)
+        self.data_in_menu.addSeparator()
         self.data_in_menu.addAction(self.gen_trace_in_action)
+        self.data_in_menu.addAction(self.load_from_simulation_action)
 
-    def settings_in_changed(self, param, changes):
+    def settings_changed(self, param, changes):
         for param, change, data in changes:
-            path = self.settings_data_in.childPath(param)
+            path = self.settings.childPath(param)
             if change == 'childAdded':
                 pass
             elif change == 'parent':
                 pass
             elif change == 'value':
                 if param.name() == 'method':
-                    self.settings_data_in.child('algo',
+                    self.settings.child('algo',
                                                 'nlprocess').setLimits(list(_PNPS_CLASSES[param.value()].keys()))
 
-    def settings_retriever_changed(self, param, changes):
-        for param, change, data in changes:
-            path = self.settings_data_in.childPath(param)
-            if change == 'childAdded':
-                pass
-            elif change == 'parent':
-                pass
-            elif change == 'value':
-                if param.name() == 'method':
-                    pass
+                elif param.name() in putils.iter_children(self.settings.child('processing', 'ROIselect'),
+                                                          []) and 'ROIselect' in param.parent().name():  # to be sure
+                    # a param named 'y0' for instance will not collide with the y0 from the ROI
+                    try:
+                        self.viewer_trace_in.ROI_select_signal.disconnect(self.update_ROI)
+                    except Exception as e:
+                        pass
+                    if self.settings.child('processing', 'ROIselect', 'crop_trace').value():
+                        if not self.viewer_trace_in.ROIselect_action.isChecked():
+                            self.viewer_trace_in.ROIselect_action.trigger()
+                            QtWidgets.QApplication.processEvents()
+                        self.viewer_trace_in.ui.ROIselect.setPos(
+                            self.settings.child('processing', 'ROIselect', 'x0').value(),
+                            self.settings.child('processing', 'ROIselect', 'y0').value())
+                        self.viewer_trace_in.ui.ROIselect.setSize(
+                            [self.settings.child('processing', 'ROIselect', 'width').value(),
+                             self.settings.child('processing', 'ROIselect', 'height').value()])
+                        self.viewer_trace_in.ROI_select_signal.connect(self.update_ROI)
+                    else:
+                        if self.viewer_trace_in.ROIselect_action.isChecked():
+                            self.viewer_trace_in.ROIselect_action.trigger()
+                elif param.name() in putils.iter_children(self.settings.child('processing', 'linearselect'),
+                                                          []) and 'linearselect' in param.parent().name():  # to be sure
+                    # a param named 'y0' for instance will not collide with the y0 from the ROI
+                    try:
+                        self.linear_region.sigRegionChangeFinished.disconnect(self.update_linear)
+                    except Exception as e:
+                        pass
+                    self.linear_region.setVisible(self.settings.child('processing',
+                                                                              'linearselect', 'dosubstract').value())
+                    pos_real = np.array([self.settings.child('processing', 'linearselect', 'wl0').value(),
+                                         self.settings.child('processing',
+                                                                     'linearselect', 'wl1').value()]) * 1e-9
+
+                    pos_pxl, y = self.viewer_trace_in.unscale_axis(np.array(pos_real), np.array([0, 1]))
+                    self.linear_region.setPos(pos_pxl)
+                    self.linear_region.sigRegionChangeFinished.connect(self.update_linear)
+
+
 
     def quit_fun(self):
         """
@@ -304,27 +360,36 @@ class Retriever(QObject):
 
         #  create main docks
 
+        self.ui.dock_settings = Dock('Settings')
+        self.dockarea.addDock(self.ui.dock_settings, 'top')
+
         self.ui.dock_data_in = Dock('Data In')
-        self.dockarea.addDock(self.ui.dock_data_in, 'top')
+        self.dockarea.addDock(self.ui.dock_data_in, 'left', self.ui.dock_settings)
 
         self.ui.dock_processed = Dock('Processed Data')
-        self.dockarea.addDock(self.ui.dock_processed, 'bottom', self.ui.dock_data_in)
+        self.dockarea.addDock(self.ui.dock_processed, 'below', self.ui.dock_data_in)
 
 
         self.ui.dock_retriever = Dock('Retriever')
         self.dockarea.addDock(self.ui.dock_retriever, 'below', self.ui.dock_processed)
 
-        self.ui.dock_retrieved_trace = Dock('Retrieved Trace')
-        self.dockarea.addDock(self.ui.dock_retrieved_trace, 'below', self.ui.dock_retriever)
 
         self.ui.dock_retrieved_data = Dock('Retrieved Data')
-        self.dockarea.addDock(self.ui.dock_retrieved_data, 'below', self.ui.dock_retrieved_trace)
+        self.dockarea.addDock(self.ui.dock_retrieved_data, 'below', self.ui.dock_retriever)
 
         self.ui.dock_processed.raiseDock()
 
+
         # ######################################################
-        #  setup data in dock
-        self.data_in_toolbar = QtWidgets.QToolBar()
+        #  setup settings in dock
+        self.settings_tree = ParameterTree()
+        self.settings_tree.setMinimumWidth(300)
+        self.ui.dock_settings.addWidget(self.settings_tree)
+        self.ui.dock_settings.setStretch(0.5)
+
+        # setup toolbar
+        self.toolbar = QtWidgets.QToolBar()
+        self.mainwindow.addToolBar(self.toolbar)
         self.load_trace_in_action = gutils.QAction(QIcon(QPixmap(":/icons/Icon_Library/Open_2D.png")),
                                                    'Load Experimental Trace')
         self.load_spectrum_in_action = gutils.QAction(QIcon(QPixmap(":/icons/Icon_Library/Open_1D.png")),
@@ -339,41 +404,53 @@ class Retriever(QObject):
         self.gen_trace_in_action.triggered.connect(self.open_simulator)
         self.load_from_simulation_action.triggered.connect(self.load_from_simulator)
 
-        self.data_in_toolbar.addAction(self.load_trace_in_action)
-        self.data_in_toolbar.addAction(self.load_spectrum_in_action)
-        self.data_in_toolbar.addAction(self.gen_trace_in_action)
-        self.data_in_toolbar.addAction(self.load_from_simulation_action)
+        self.toolbar.addAction(self.load_trace_in_action)
+        self.toolbar.addAction(self.load_spectrum_in_action)
+        self.toolbar.addAction(self.gen_trace_in_action)
+        self.toolbar.addAction(self.load_from_simulation_action)
+        
+        
+        # ######################################################
+        #  setup data in dock
+        
         data_in_splitter = QtWidgets.QSplitter()
         self.viewer_trace_in = Viewer2D()
         self.viewer_trace_in.ui.histogram_red.gradient.restoreState(Gradients['femto'])
         self.viewer_trace_in.aspect_ratio_action.click()
+
+        pos = self.viewer_trace_in.roi_manager.viewer_widget.plotItem.vb.viewRange()[0]
+        self.linear_region = LinearROI(index=0, pos=pos)
+        self.linear_region.setZValue(-10)
+        self.linear_region.setOpacity(0.5)
+        self.linear_region.setBrush([255, 0, 0, 0])
+        self.viewer_trace_in.roi_manager.viewer_widget.plotItem.addItem(self.linear_region)
+        self.linear_region.sigRegionChangeFinished.connect(self.update_linear)
+        self.linear_region.setVisible(False)
+
         self.viewer_spectrum_in = Viewer1D()
-        self.settings_data_in_tree = ParameterTree()
-        self.settings_data_in_tree.setMinimumWidth(300)
 
         data_in_splitter.addWidget(self.viewer_trace_in.parent)
         data_in_splitter.addWidget(self.viewer_spectrum_in.parent)
-        data_in_splitter.addWidget(self.settings_data_in_tree)
-        self.ui.dock_data_in.addWidget(self.data_in_toolbar)
         self.ui.dock_data_in.addWidget(data_in_splitter)
 
-        self.settings_data_in_tree.setParameters(self.settings_data_in, showTop=False)
-        self.settings_data_in.sigTreeStateChanged.connect(self.data_in_settings_changed)
+        self.settings_tree.setParameters(self.settings, showTop=False)
+        self.settings.sigTreeStateChanged.connect(self.data_in_settings_changed)
 
         # #################################################
         # setup retriever dock
         retriever_widget = QtWidgets.QSplitter()
         self.viewer_live_trace = Viewer2D()
-        self.viewer_live_trace.ui.histogram_red.gradient.restoreState(Gradients['femto'])
-        self.viewer_error = Viewer0D()
-        self.settings_retriever_tree = ParameterTree()
-        self.settings_retriever_tree.setMinimumWidth(300)
-        self.settings_retriever_tree.setParameters(self.settings_retriever, showTop=False)
+        self.viewer_live_trace.ui.histogram_red.gradient.restoreState(Gradients['femto_error'])
+        self.viewer_live_trace.aspect_ratio_action.trigger()
+        #self.viewer_live_trace.auto_levels_action.trigger()
+        self.viewer_live_time = Viewer1D()
+        self.info_widget = QtWidgets.QTextEdit()
+        self.info_widget.setReadOnly(True)
 
         self.ui.dock_retriever.addWidget(retriever_widget)
         retriever_widget.addWidget(self.viewer_live_trace.parent)
-        retriever_widget.addWidget(self.viewer_error.parent)
-        retriever_widget.addWidget(self.settings_retriever_tree)
+        retriever_widget.addWidget(self.viewer_live_time.parent)
+        retriever_widget.addWidget(self.info_widget)
 
         #####################################
         # setup processed dock
@@ -401,12 +478,17 @@ class Retriever(QObject):
         trace_widget.layout().addWidget(self.trace_canvas)
 
         ##################################################
-        # setup retrieved trace dock
-
-
-
-        ##################################################
         # setup retrievd data dock
+        data_widget = QtWidgets.QWidget()
+        data_widget.setLayout(QtWidgets.QVBoxLayout())
+        self.data_canvas = MplCanvas(data_widget, width=5, height=4, dpi=100)
+        # Create toolbar, passing canvas as first parament, parent (self, the MainWindow) as second.
+        toolbar_data = NavigationToolbar(self.data_canvas, data_widget)
+        data_widget.layout().addWidget(toolbar_data)
+        data_widget.layout().addWidget(self.data_canvas)
+        self.ui.dock_retrieved_data.addWidget(data_widget)
+
+        self.ui.dock_data_in.raiseDock()
 
     def open_simulator(self):
         simulator_widget = QtWidgets.QWidget()
@@ -428,58 +510,71 @@ class Retriever(QObject):
             self.display_data_in()
             self.update_spectrum_info(self.data_in['raw_spectrum'])
             self.update_trace_info(self.data_in['raw_trace'])
+            #self.viewer_trace_in.ROIselect_action.trigger()
 
     def update_spectrum_info(self, raw_spectrum):
-            wl0, fwhm = utils.my_moment(raw_spectrum['axis']['data'], raw_spectrum['data'])
-            self.settings_data_in.child('data_in_info', 'spectrum_in_info', 'wl0').setValue(wl0 * 1e9)
-            self.settings_data_in.child('data_in_info', 'spectrum_in_info', 'wl_fwhm').setValue(fwhm * 1e9)
-            self.settings_data_in.child('data_in_info', 'spectrum_in_info',
-                                        'spectrum_size').setValue(len(raw_spectrum['data']))
+        wl0, fwhm = utils.my_moment(raw_spectrum['axis']['data'], raw_spectrum['data'])
+        self.settings.child('data_in_info', 'spectrum_in_info', 'wl0').setValue(wl0 * 1e9)
+        self.settings.child('data_in_info', 'spectrum_in_info', 'wl_fwhm').setValue(fwhm * 1e9)
+        self.settings.child('data_in_info', 'spectrum_in_info',
+                                    'spectrum_size').setValue(len(raw_spectrum['data']))
+
+        self.settings.child('processing', 'grid_settings', 'wl0').setValue(wl0 * 1e9)
 
     def update_trace_info(self, raw_trace):
         wl0, fwhm = utils.my_moment(raw_trace['axis']['data'], np.sum(raw_trace['data'], 0))
-        self.settings_data_in.child('data_in_info', 'trace_in_info', 'wl0').setValue(wl0 * 1e9)
-        self.settings_data_in.child('data_in_info', 'trace_in_info', 'wl_fwhm').setValue(fwhm * 1e9)
+        self.settings.child('data_in_info', 'trace_in_info', 'wl0').setValue(wl0 * 1e9)
+        self.settings.child('data_in_info', 'trace_in_info', 'wl_fwhm').setValue(fwhm * 1e9)
 
-        self.settings_data_in.child('data_in_info', 'trace_in_info', 'trace_param_size').setValue(
+        self.settings.child('data_in_info', 'trace_in_info', 'trace_param_size').setValue(
             len(raw_trace['parameter_axis']))
-        self.settings_data_in.child('data_in_info', 'trace_in_info',
+        self.settings.child('data_in_info', 'trace_in_info',
                                     'trace_wl_size').setValue(len(raw_trace['axis']['data']))
 
-        self.settings_data_in.child('processing', 'grid_settings', 'wl0').setValue(wl0 * 1e9)
-        self.settings_data_in.child('processing', 'grid_settings',
+
+        self.settings.child('processing', 'grid_settings',
                                     'npoints').setValue(len(raw_trace['parameter_axis']['data']))
 
-        method = self.settings_data_in.child('data_in_info', 'trace_type').value()
+        method = self.settings.child('data_in_info', 'trace_type').value()
         if not (method == 'dscan' or method == 'miips'):
-            self.settings_data_in.child('processing', 'grid_settings',
+            self.settings.child('processing', 'grid_settings',
                                         'time_resolution').setValue(np.mean(
                 np.diff(raw_trace['parameter_axis']['data'])) * 1e15)
 
     def generate_ft_grid(self):
-        wl0 = self.settings_data_in.child('processing', 'grid_settings', 'wl0').value() * 1e-9
-        Npts = self.settings_data_in.child('processing', 'grid_settings', 'npoints').value()
-        dt = self.settings_data_in.child('processing', 'grid_settings', 'time_resolution').value() * 1e-15
+        wl0 = self.settings.child('processing', 'grid_settings', 'wl0').value() * 1e-9
+        Npts = self.settings.child('processing', 'grid_settings', 'npoints').value()
+        dt = self.settings.child('processing', 'grid_settings', 'time_resolution').value() * 1e-15
         self.ft = FourierTransform(Npts, dt, w0=wl2om(-wl0 - 300e-9))
 
 
     def process_trace(self):
+        self.ui.dock_processed.raiseDock()
+        if self.pnps is None:
+            logger.info('PNPS is not yet defined, process the spectrum first')
+            return
         trace_in = self.get_trace_in()
-        ## substract dark range of the spectrometer (if any)
-        if len(self.viewer_trace_in.roi_manager.ROIs) > 0:
-            roi = [self.viewer_trace_in.roi_manager.ROIs.keys()][0]
-            pos = self.viewer_trace_in.roi_manager.ROIs[roi].pos()
-            width, height = self.viewer_trace_in.roi_manager.ROIs[roi].size()
-            xlim_pxls = np.array([pos.x(), pos.y()+width])
-            ylim_pxls = np.array([pos.x(), pos.y() + height])
-            xlim, ylim = self.viewer_trace_in.scale_axis(xlim_pxls, ylim_pxls)
+        # TODO
+        # ## substract bright spots range (if any)
+        # if len(self.viewer_trace_in.roi_manager.ROIs) > 0:
+        #     roi = [self.viewer_trace_in.roi_manager.ROIs.keys()][0]
+        #     pos = self.viewer_trace_in.roi_manager.ROIs[roi].pos()
+        #     width, height = self.viewer_trace_in.roi_manager.ROIs[roi].size()
+        #     xlim_pxls = np.array([pos.x(), pos.y()+width])
+        #     ylim_pxls = np.array([pos.x(), pos.y() + height])
+        #     xlim, ylim = self.viewer_trace_in.scale_axis(xlim_pxls, ylim_pxls)
+        #     trace_in = preprocess(trace_in, signal_range=None, bright_signal_range=tuple(xlim)) # bright_signal_range doesn't exists yet'
+
+        if self.settings.child('processing', 'linearselect', 'dosubstract').value():
+            xlim = np.array((self.settings.child('processing', 'linearselect', 'wl0').value(),
+                    self.settings.child('processing', 'linearselect', 'wl1').value())) * 1e-9
             trace_in = preprocess(trace_in, signal_range=None, dark_signal_range=tuple(xlim))
 
-        if self.viewer_trace_in.ROIselect_action.isChecked():
-            x0 = self.settings_data_in.child('processing', 'ROIselect', 'x0').value()
-            y0 = self.settings_data_in.child('processing', 'ROIselect', 'y0').value()
-            width = self.settings_data_in.child('processing', 'ROIselect', 'width').value()
-            height = self.settings_data_in.child('processing', 'ROIselect', 'height').value()
+        if self.settings.child('processing', 'ROIselect', 'crop_trace').value():
+            x0 = self.settings.child('processing', 'ROIselect', 'x0').value()
+            y0 = self.settings.child('processing', 'ROIselect', 'y0').value()
+            width = self.settings.child('processing', 'ROIselect', 'width').value()
+            height = self.settings.child('processing', 'ROIselect', 'height').value()
             xlim_pxls = np.array([x0, x0+width])
             ylim_pxls = np.array([y0, y0+height])
             xlim, ylim = self.viewer_trace_in.scale_axis(xlim_pxls, ylim_pxls)
@@ -493,17 +588,29 @@ class Retriever(QObject):
         self.trace_canvas.draw()
 
     def process_both(self):
-        self.process_trace()
         self.process_spectrum()
+        self.process_trace()
+
 
     def process_spectrum(self):
+
+        self.ui.dock_processed.raiseDock()
+
         self.generate_ft_grid()
-        method = self.settings_data_in.child('data_in_info', 'trace_type').value()
-        nlprocess = self.settings_data_in.child('data_in_info', 'nlprocess').value()
-        wl0 = self.settings_data_in.child('processing', 'grid_settings', 'wl0').value() * 1e-9
+        method = self.settings.child('data_in_info', 'trace_type').value()
+        nlprocess = self.settings.child('data_in_info', 'nlprocess').value()
+        wl0 = self.settings.child('data_in_info', 'trace_in_info', 'wl0').value() * 1e-9
         spectrum = self.data_in['raw_spectrum']['data']
         wavelength = self.data_in['raw_spectrum']['axis']['data']
-        self.data_in['pulse_in'] = Pulse(self.ft, wl0)
+
+        if 'shg' in nlprocess:
+            wl0real = 2 * wl0
+        elif 'thg' in nlprocess:
+            wl0real = 3 * wl0
+        else:
+            wl0real = wl0
+
+        self.data_in['pulse_in'] = Pulse(self.ft, wl0real)
 
         for roi in self.viewer_spectrum_in.roi_manager.ROIs:
             range = self.viewer_spectrum_in.roi_manager.ROIs[roi].pos()
@@ -517,51 +624,113 @@ class Retriever(QObject):
         self.pulse_canvas.draw()
 
     def start_retriever(self):
-        retriever_cls = _RETRIEVER_CLASSES[self.settings_retriever.child('algo_type').value()]
-        verbose = self.settings_retriever.child('verbose').value()
-        max_iter = self.settings_retriever.child('max_iter').value()
-        preprocess2(self.data_in['trace_in'], self.pnps)
-        if self.pnps is not None:
-            self.retriever = retriever_cls(self.pnps, logging=True, verbose=verbose, maxiter=max_iter)
-            random_gaussian(self.data_in['pulse_in'], 1000e-15, phase_max=0.1)
-            # now retrieve from the synthetic trace simulated above
-            self.retriever.retrieve(self.data_in['trace_in'], self.data_in['pulse_in'].spectrum, weights=None)
+        self.ui.dock_retriever.raiseDock()
+        self.info_widget.clear()
+        # mandatory to deal with multithreads
+        if self.retriever_thread is not None:
+            if self.retriever_thread.isRunning():
+                self.retriever_thread.terminate()
+                while not self.retriever_thread.isFinished():
+                    QThread.msleep(100)
+                self.retriever_thread = None
 
-            result = self.retriever.result()
-            fundamental = self.data_in['raw_spectrum']['data']
-            wavelength = self.data_in['raw_spectrum']['axis']['data']
-            fundamental *= (wavelength * wavelength)
+        self.retriever_thread = QThread()
+        retriever = RetrieverWorker(self.data_in, self.pnps, self.settings)
+        retriever.moveToThread(self.retriever_thread)
+        retriever.status_sig[str].connect(self.update_retriever_info)
+        retriever.result_signal[SimpleNamespace].connect(self.display_results)
+        retriever.callback_sig[list].connect(self.update_retriever)
+        self.retriever_signal[str].connect(retriever.command_retriever)
+        self.retriever_thread.retriever = retriever
+        self.retriever_thread.start()
 
-            spec = self.data_in['pulse_in'].spectral_intensity
-            spec = scipy.interpolate.interp1d(self.data_in['pulse_in'].wl, spec,
-                                              bounds_error=False,
-                                              fill_value=0.0)(wavelength)
-            fundamental *= lib.best_scale(fundamental, spec)
-            print("spectrum error", "%e" % lib.nrms(fundamental, spec))
+        self.retriever_signal.emit('start')
 
-            # do the retrieval plot
-            RetrievalResultPlot(result, fundamental=fundamental,
-                                fundamental_wavelength=wavelength,
-                                oversampling=8, phase_blanking=True,
-                                phase_blanking_threshold=0.01, limit=True)
-        else:
-            return
+    def stop_retriever(self):
+        self.retriever_signal.emit('stop')
+
+    def update_retriever_info(self, info):
+        self.info_widget.moveCursor(QTextCursor.End)
+        self.info_widget.insertPlainText(info+'\n')
+        self.info_widget.moveCursor(QTextCursor.End)
+
+    @pyqtSlot(list)
+    def update_retriever(self, args):
+        max = 0.8*np.max([np.abs(np.max(args[0])), np.abs(np.min(args[0]))])
+        self.viewer_live_trace.ui.histogram_red.setHistogramRange(-max, max)
+        self.viewer_live_trace.ui.histogram_red.setLevels(-max, max)
+        self.viewer_live_trace.setImage(args[0])
+        self.viewer_live_trace.x_axis = utils.Axis(data=args[2], label='Time', unit='s')
+        self.viewer_live_trace.y_axis = utils.Axis(data=args[1], label='Frequency', unit='m')
+
+        self.data_in['pulse_in'].spectrum = args[3]
+        #self.data_in['pulse_in'] = substract_linear_phase(self.data_in['pulse_in'])
+        self.viewer_live_time.show_data([np.abs(self.data_in['pulse_in'].field)**2],
+                                        x_axis=utils.Axis(data=self.data_in['pulse_in'].t, label='Time', unit='s'))
+
+    @pyqtSlot(SimpleNamespace)
+    def display_results(self, result):
+        self.ui.dock_retrieved_data.raiseDock()
+
+        self.data_in['pulse_in'].spectrum = result.pulse_retrieved
+        fundamental = self.data_in['raw_spectrum']['data']
+        wavelength = self.data_in['raw_spectrum']['axis']['data']
+        fundamental *= (wavelength * wavelength)
+        spec = self.data_in['pulse_in'].spectral_intensity
+        spec = scipy.interpolate.interp1d(self.data_in['pulse_in'].wl, spec,
+                                          bounds_error=False,
+                                          fill_value=0.0)(wavelength)
+
+        fundamental *= lib.best_scale(fundamental, spec)
+        print("spectrum error", "%e" % lib.nrms(fundamental, spec))
+
+        # do the retrieval plot
+
+        self.data_canvas.figure.clf()
+        RetrievalResultPlot(result, fig=self.data_canvas.figure, fundamental=fundamental,
+                            fundamental_wavelength=wavelength,
+                            oversampling=8, phase_blanking=True,
+                            phase_blanking_threshold=0.01, limit=True)
+        self.data_canvas.draw()
+
     @pyqtSlot(QtCore.QRectF)
     def update_ROI(self, rect=QtCore.QRectF(0, 0, 1, 1)):
-        self.settings_data_in.child('processing', 'ROIselect', 'x0').setValue(int(rect.x()))
-        self.settings_data_in.child('processing', 'ROIselect', 'y0').setValue(int(rect.y()))
-        self.settings_data_in.child('processing', 'ROIselect', 'width').setValue(max([1, int(rect.width())]))
-        self.settings_data_in.child('processing', 'ROIselect', 'height').setValue(max([1, int(rect.height())]))
+        self.settings.child('processing', 'ROIselect', 'x0').setValue(int(rect.x()))
+        self.settings.child('processing', 'ROIselect', 'y0').setValue(int(rect.y()))
+        self.settings.child('processing', 'ROIselect', 'width').setValue(max([1, int(rect.width())]))
+        self.settings.child('processing', 'ROIselect', 'height').setValue(max([1, int(rect.height())]))
+
+    def update_linear(self, linear_roi):
+        pos = linear_roi.pos()
+        pos_real, y = self.viewer_trace_in.scale_axis(np.array(pos), np.array([0, 1]))
+        pos_real *= 1e9
+        self.settings.child('processing', 'linearselect', 'wl0').setValue(pos_real[0])
+        self.settings.child('processing', 'linearselect', 'wl1').setValue(pos_real[1])
 
     def show_ROI(self):
-        self.settings_data_in.child('processing', 'ROIselect').setOpts(
-            visible=self.viewer_trace_in.ROIselect_action.isChecked())
+        # self.settings.child('processing', 'ROIselect').setOpts(
+        #     visible=self.viewer_trace_in.ROIselect_action.isChecked())
+        data = self.data_in['raw_trace']['data']
+        axes = [np.arange(0, data.shape[0]), np.arange(0, data.shape[1])]
+        axes_index = list(range(data.ndim))
+        marginals = lib.marginals(data)
+        limits = []
+        for index in axes_index:
+            limit = lib.limit(axes[index], marginals[index],
+                              threshold=1e-2, padding=0.25)
+            limits.append(limit)
+
+        self.viewer_trace_in.ui.ROIselect.setPos((limits[1][0], limits[0][0]))
+        self.viewer_trace_in.ui.ROIselect.setSize((limits[1][1]-limits[1][0], limits[0][1] - limits[0][0]))
+
+        self.linear_region.setPos(limits[1])
+
         pos = self.viewer_trace_in.ui.ROIselect.pos()
         size = self.viewer_trace_in.ui.ROIselect.size()
         self.update_ROI(QtCore.QRectF(pos[0], pos[1], size[0], size[1]))
 
     def get_trace_in(self):
-        method = self.settings_data_in.child('data_in_info', 'trace_type').value()
+        method = self.settings.child('data_in_info', 'trace_type').value()
         if method == 'dscan':
             label = 'Insertion'
             unit = 'm'
@@ -606,9 +775,9 @@ class Retriever(QObject):
                 if self.data_in is None:
                     self.data_in = DataIn(source='experimental')
 
-                scaling_parameter = self.settings_data_in.child('data_in_info',
+                scaling_parameter = self.settings.child('data_in_info',
                                                                 'trace_in_info', 'param_scaling').value()
-                scaling_wl = self.settings_data_in.child('data_in_info', 'trace_in_info', 'wl_scaling').value()
+                scaling_wl = self.settings.child('data_in_info', 'trace_in_info', 'wl_scaling').value()
 
                 wl['units'] = 'm'
                 wl['data'] *= scaling_wl
@@ -626,14 +795,15 @@ class Retriever(QObject):
                 self.update_trace_info(self.data_in['raw_trace'])
 
                 # dt = np.mean(np.diff(parameter_axis['data'])) * scaling_parameter
-                # wl0 = self.settings_data_in.child('data_in_info', 'trace_in_info', 'wl0').value() * 1e-9
+                # wl0 = self.settings.child('data_in_info', 'trace_in_info', 'wl0').value() * 1e-9
                 # ft = FourierTransform(len(parameter_axis['data']), dt, w0=wl2om(-wl0 - 300e-9))
                 # self.data_in = DataIn(name='data_in', source='experimental', trace_in=trace_in,
-                #                       pulse_in=Pulse(ft, self.settings_data_in.child('data_in_info',
+                #                       pulse_in=Pulse(ft, self.settings.child('data_in_info',
                 #                                                                        'trace_in_info',
                 #                                                                        'wl0').value() * scaling_wl))
 
                 self.display_trace_in()
+                self.viewer_trace_in.ROIselect_action.trigger()
 
         except Exception as e:
             logger.exception(str(e))
@@ -687,6 +857,52 @@ class Retriever(QObject):
                 pass
 
 
+class RetrieverWorker(QObject):
+    result_signal = pyqtSignal(SimpleNamespace)
+    status_sig = pyqtSignal(str)
+    callback_sig = pyqtSignal(list)
+
+    def __init__(self, data_in, pnps, settings):
+        super().__init__()
+        self.settings = settings
+        self.data_in = data_in
+        self.pnps = pnps
+        self.retirever = None
+
+    # def send_callback(self, pnps):
+    #     self.callback_sig.emit([pnps.Tmn, [pnps.parameter, pnps.process_w], pnps.pulse.field, pnps.field.t])
+
+    @pyqtSlot(str)
+    def command_retriever(self, command):
+        if command == 'start':
+            self.start_retriever()
+        elif command == 'stop':
+            self.stop_retriever()
+
+    def start_retriever(self):
+        retriever_cls = _RETRIEVER_CLASSES[self.settings.child('retrieving', 'algo_type').value()]
+        verbose = self.settings.child('retrieving', 'verbose').value()
+        max_iter = self.settings.child('retrieving', 'max_iter').value()
+        fwhm = self.settings.child('retrieving', 'pulse_guess', 'fwhm').value()
+        amplitude = self.settings.child('retrieving', 'pulse_guess', 'phase_amp').value()
+
+
+        preprocess2(self.data_in['trace_in'], self.pnps)
+
+
+        self.retriever = retriever_cls(self.pnps, logging=True, verbose=verbose, maxiter=max_iter,
+                                       status_sig=self.status_sig, callback=self.callback_sig.emit,
+                                       step_command=QtWidgets.QApplication.processEvents)
+        random_gaussian(self.data_in['pulse_in'], fwhm*1e-15, phase_max=amplitude)
+        # now retrieve from the synthetic trace simulated above
+        self.retriever.retrieve(self.data_in['trace_in'], self.data_in['pulse_in'].spectrum, weights=None)
+
+        self.result_signal.emit(self.retriever.result())
+
+    def stop_retriever(self):
+        self.retriever._retrieval_state.running = False
+
+
 def main():
     from pymodaq.daq_utils.daq_utils import get_set_preset_path
     app = QtWidgets.QApplication(sys.argv)
@@ -698,7 +914,7 @@ def main():
 
     prog = Retriever(dashboard=None, dockarea=area)
     win.show()
-    prog.load_trace_in(fname='C:\\Data\\2021\\20210309\\Dataset_20210309_000\\Dataset_20210309_000.h5',
+    prog.load_trace_in(fname='C:\\Data\\2021\\20210312\\Dataset_20210312_000\\Dataset_20210312_000.h5',
                         node_path='/Raw_datas/Scan000/Detector000/Data1D/Ch000/Data')
     prog.load_spectrum_in(fname='C:\\Users\\weber\\Desktop\\pulse.h5',
                         node_path='/Raw_datas/Detector000/Data1D/Ch000/Data')

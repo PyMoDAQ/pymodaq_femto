@@ -1,24 +1,19 @@
 from PyQt5.QtCore import QObject
 from PyQt5 import QtWidgets
-import matplotlib
-matplotlib.use('Qt5Agg')
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT as NavigationToolbar
-from matplotlib.figure import Figure
-from matplotlib import pyplot as plt
-from matplotlib.ticker import EngFormatter
+
 from pathlib import Path
 from pyqtgraph.parametertree import Parameter, ParameterTree
 from pymodaq.daq_utils.parameter import pymodaq_ptypes
 from pypret.frequencies import om2wl, wl2om, convert
-from pypret import FourierTransform, Pulse, PNPS, PulsePlot, lib, MeshData
-from pypret.graphics import plot_complex, plot_meshdata
-from scipy.interpolate import interp2d
+from pypret import FourierTransform, Pulse, PNPS, lib, MeshData
+
 import numpy as np
-from pymodaq.daq_utils.daq_utils import gauss1D, my_moment, l2w, linspace_step, Axis
+from pymodaq.daq_utils.daq_utils import gauss1D, my_moment, l2w, linspace_step, Axis, normalize
 from pymodaq.daq_utils.array_manipulation import linspace_this_image, crop_vector_to_axis, crop_array_to_axis,\
     linspace_this_vect
 from pypret.material import BK7
 from pymodaq_femto.materials import FS_extended
+from pymodaq_femto.graphics import MplCanvas, NavigationToolbar, MeshDataPlot, PulsePlot
 from collections import OrderedDict
 from pymodaq_femto import _PNPS_CLASSES
 
@@ -31,127 +26,7 @@ methods.extend(methods_tmp)
 nlprocesses = list(_PNPS_CLASSES[methods[0]].keys())
 materials = OrderedDict(FS=FS_extended, BK7=BK7)
 
-def normalize(x):
-    x = x - np.min(x)
-    x = x / np.max(x)
-    return x
 
-class MplCanvas(FigureCanvasQTAgg):
-    def __init__(self, parent=None, width=5, height=4, dpi=100):
-        fig = Figure(figsize=(width, height), dpi=dpi)
-        super().__init__(fig)
-
-
-class PulsePlot:
-
-    def __init__(self, pulse, fig=None, plot=True, **kwargs):
-        self.pulse = pulse
-        self.fig = fig
-        if plot:
-            self.plot(**kwargs)
-
-    def plot(self, xaxis='wavelength', yaxis='intensity', limit=True,
-             oversampling=False, phase_blanking=False,
-             phase_blanking_threshold=1e-3, show=True):
-        pulse = self.pulse
-
-        if self.fig is None:
-            fig, axs = plt.subplots(1, 2)
-        else:
-            axs = self.fig.subplots(nrows=1, ncols=2)
-
-        fig = self.fig
-        ax1, ax2 = axs.flat
-        ax12 = ax1.twinx()
-        ax22 = ax2.twinx()
-
-        if oversampling:
-            t = np.linspace(pulse.t[0], pulse.t[-1], pulse.N * oversampling)
-            field = pulse.field_at(t)
-        else:
-            t = pulse.t
-            field = pulse.field
-
-        # time domain
-        li11, li12, tamp, tpha = plot_complex(t, field, ax1, ax12, yaxis=yaxis,
-                                              phase_blanking=phase_blanking, limit=limit,
-                                              phase_blanking_threshold=phase_blanking_threshold)
-        fx = EngFormatter(unit="s")
-        ax1.xaxis.set_major_formatter(fx)
-        ax1.set_title("time domain")
-        ax1.set_xlabel("time")
-        ax1.set_ylabel(yaxis)
-        ax12.set_ylabel("phase (rad)")
-
-        # frequency domain
-        if oversampling:
-            w = np.linspace(pulse.w[0], pulse.w[-1], pulse.N * oversampling)
-            spectrum = pulse.spectrum_at(w)
-        else:
-            w = pulse.w
-            spectrum = pulse.spectrum
-
-        if xaxis == "wavelength":
-            w = convert(w + pulse.w0, "om", "wl")
-            unit = "m"
-            label = "wavelength"
-        elif xaxis == "frequency":
-            w = w
-            unit = " rad Hz"
-            label = "frequency"
-
-        li21, li22, samp, spha = plot_complex(w, spectrum, ax2, ax22, yaxis=yaxis,
-                                              phase_blanking=phase_blanking, limit=limit,
-                                              phase_blanking_threshold=phase_blanking_threshold)
-        fx = EngFormatter(unit=unit)
-        ax2.xaxis.set_major_formatter(fx)
-        ax2.set_title("frequency domain")
-        ax2.set_xlabel(label)
-        ax2.set_ylabel(yaxis)
-        ax22.set_ylabel("phase (rad)")
-
-        self.fig = fig
-        self.ax1, self.ax2 = ax1, ax2
-        self.ax12, self.ax22 = ax12, ax22
-        self.li11, self.li12, self.li21, self.li22 = li11, li12, li21, li22
-        self.tamp, self.tpha = tamp, tpha
-        self.samp, self.spha = samp, spha
-
-        if show:
-            fig.tight_layout()
-        #     plt.show()
-
-
-
-
-
-class MeshDataPlot:
-
-    def __init__(self, mesh_data, fig=None, plot=True, **kwargs):
-        self.md = mesh_data
-        self.fig = fig
-        if plot:
-            self.plot(**kwargs)
-
-    def plot(self, show=True, **kwargs):
-        md = self.md
-        if self.fig is None:
-            fig, ax = plt.subplots()
-        else:
-            fig = self.fig
-            ax = self.fig.subplots(nrows=1, ncols=1)
-            
-        im = plot_meshdata(ax, md, "nipy_spectral", **kwargs)
-        fig.colorbar(im, ax=ax)
-
-        self.fig, self.ax = fig, ax
-        self.im = im
-        if show:
-            fig.tight_layout()
-            plt.show()
-
-    def show(self):
-        plt.show()
 
 class Simulator(QObject):
     params = [
@@ -164,10 +39,27 @@ class Simulator(QObject):
             {'title': 'Pulse Settings:', 'name': 'pulse_settings', 'type': 'group', 'children': [
                 {'title': 'FWHM (fs):', 'name': 'fwhm_time', 'type': 'float', 'value': 5,
                  'tip': 'Fourier Limited Pulse duration in femtoseconds'},
-                {'title': 'GDD (fs2):', 'name': 'GDD', 'type': 'float', 'value': 50,
-                 'tip': 'Group Delay Dispersion in femtosecond square'},
-                {'title': 'TOD (fs3):', 'name': 'TOD', 'type': 'float', 'value': 500,
-                 'tip': 'Third Order Dispersion in femtosecond cube'},
+                {'title': 'Shaping type:', 'name': 'shaping_type', 'type': 'list', 'values': ['Taylor', 'Gaussian'],
+                 },
+                {'title': 'Npulses:', 'name': 'npulses', 'type': 'int', 'value': 1,
+                 'tip': 'Number of pulse in a sequence'},
+                {'title': 'Pulses separation:', 'name': 'delay_pulses', 'type': 'float', 'value': 100,
+                 'tip': 'Delay between pulses in femtosecond', 'visible': False},
+                {'title': 'Taylor Phase:', 'name': 'taylor_phase', 'type': 'group', 'children': [
+                    {'title': 'Delay (fs):', 'name': 'GD', 'type': 'float', 'value': 0,
+                     'tip': 'Group Delay in femtosecond'},
+                    {'title': 'GDD (fs2):', 'name': 'GDD', 'type': 'float', 'value': 50,
+                     'tip': 'Group Delay Dispersion in femtosecond square'},
+                    {'title': 'TOD (fs3):', 'name': 'TOD', 'type': 'float', 'value': 500,
+                     'tip': 'Third Order Dispersion in femtosecond cube'},
+                ]},
+                {'title': 'Gaussian Phase:', 'name': 'gaussian_phase', 'type': 'group', 'children': [
+                    {'title': 'Amplitude (rad):', 'name': 'gauss_amp', 'type': 'float', 'value': 1,
+                     'tip': 'Amplitude of the gaussian phase in radian'},
+                    {'title': 'dlambda:', 'name': 'dlambda', 'type': 'float', 'value': 50,
+                     'tip': 'FWHM (in nanometers) of the gaussian phase'},
+                ]},
+
                 {'title': 'Data File:', 'name': 'data_file_path', 'type': 'browsepath', 'filetype': True,
                  'visible': False,
                  'value': str(Path(__file__).parent.parent.parent.joinpath('data/spectral_data.csv')),
@@ -353,6 +245,18 @@ class Simulator(QObject):
                         self.settings.child('algo', 'material').hide()
                         self.settings.child('algo', 'dscan_parameter').hide()
 
+                elif param.name() == 'shaping_type':
+                    if param.value() == 'Taylor':
+                        self.settings.child('pulse_settings', 'taylor_phase').show()
+                        self.settings.child('pulse_settings', 'gaussian_phase').hide()
+                    elif param.value() == 'Gaussian':
+                        self.settings.child('pulse_settings', 'gaussian_phase').show()
+                        self.settings.child('pulse_settings', 'taylor_phase').hide()
+
+                elif param.name() == 'npulses':
+                    self.settings.child('pulse_settings', 'delay_pulses').show(param.value() > 1)
+
+
     def set_tight_layout(self, tight=True):
         self.pulse_canvas.figure.set_tight_layout(tight)
         self.trace_canvas.figure.set_tight_layout(tight)
@@ -411,10 +315,15 @@ class Simulator(QObject):
 
     def get_trace_wl(self, md, Npts=512):
         wl = l2w(md.axes[1] * 1e-15) * 1e-9
-        wl_lin, data_wl = linspace_this_image(wl[::-1], md.data[:, ::-1], axis=1,
+        wl = wl[::-1]
+        md.data = md.data[:, ::-1]
+        md.scale(1/wl**2)  # conversion has to be scaled by the Jacobian
+        wl_lin, data_wl = linspace_this_image(wl, md.data, axis=1,
                                               Npts=Npts)
+
         md = MeshData(data_wl, *[md.axes[0], wl_lin], uncertainty=md.uncertainty,
                       labels=[md.labels[0], 'Wavelength'], units=[md.units[0], 'm'])
+        md.normalize()
         return md
 
     def show_trace(self):
@@ -487,16 +396,32 @@ class Simulator(QObject):
 
         if self.settings.child('pulse_source').value() == 'Simulated':
             fwhm = self.settings.child('pulse_settings', 'fwhm_time').value()
-            domega = 4*np.log(2) / fwhm
-            GDD = self.settings.child('pulse_settings', 'GDD').value()
-            TOD = self.settings.child('pulse_settings', 'TOD').value()
-
+            domega = 4 * np.log(2) / fwhm
             pulse.spectrum = gauss1D(pulse.w, x0=0., dx=domega * 1e15)  # x0=0 because the frequency axis is already
+
+            if self.settings.child('pulse_settings', 'shaping_type').value() == 'Taylor':
+                GD = self.settings.child('pulse_settings', 'taylor_phase','GD').value()
+                GDD = self.settings.child('pulse_settings', 'taylor_phase', 'GDD').value()
+                TOD = self.settings.child('pulse_settings', 'taylor_phase', 'TOD').value()
+                phase = GD * 1e-15 * pulse.w +\
+                        GDD * 1e-30 * pulse.w ** 2 / 2 +\
+                        TOD * 1e-45 * pulse.w ** 3 / 6
+            elif self.settings.child('pulse_settings', 'shaping_type').value() == 'Gaussian':
+                amp = self.settings.child('pulse_settings', 'gaussian_phase', 'gauss_amp').value()
+                dlambda = self.settings.child('pulse_settings', 'gaussian_phase', 'dlambda').value()
+                domega = 2*np.pi*3e8 * dlambda * 1e-9 / pulse.wl0 ** 2
+                phase = amp * gauss1D(pulse.w, 0, domega)
             # centered on wl0 (see Pulse(self.ft, wl0))
             #pulse.field = gauss1D(pulse.t, x0=0, dx=fwhm * 1e-15)
-            pulse.spectrum = pulse.spectrum * np.exp(
-                1j * (GDD * 1e-30) * ((pulse.w) ** 2) / 2 + 1j * (TOD * 1e-45) * (
-                        (pulse.w) ** 3) / 6)
+            pulse.spectrum = pulse.spectrum * np.exp(1j * phase)
+
+            Npulses = self.settings.child('pulse_settings', 'npulses').value()
+            if Npulses > 1:
+                delta_t = self.settings.child('pulse_settings', 'delay_pulses').value()
+                spectrum = np.zeros_like(pulse.spectrum)
+                for ind in range(Npulses):
+                    spectrum += 1 / Npulses * pulse.spectrum * np.exp(1j * pulse.w * (-Npulses/2+ind) * delta_t * 1e-15)
+                pulse.spectrum = spectrum
 
             # # recenter pulse in time domain
             # idx = np.argmax(pulse.intensity)

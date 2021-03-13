@@ -53,11 +53,11 @@ class Simulator(QObject):
                     {'title': 'TOD (fs3):', 'name': 'TOD', 'type': 'float', 'value': 500,
                      'tip': 'Third Order Dispersion in femtosecond cube'},
                 ]},
-                {'title': 'Gaussian Phase:', 'name': 'gaussian_phase', 'type': 'group', 'children': [
-                    {'title': 'Amplitude (rad):', 'name': 'gauss_amp', 'type': 'float', 'value': 1,
+                {'title': 'Gaussian Phase:', 'name': 'gaussian_phase', 'type': 'group', 'visible': False, 'children': [
+                    {'title': 'Amplitude (rad):', 'name': 'gauss_amp', 'type': 'float', 'value': 6,
                      'tip': 'Amplitude of the gaussian phase in radian'},
-                    {'title': 'dlambda:', 'name': 'dlambda', 'type': 'float', 'value': 50,
-                     'tip': 'FWHM (in nanometers) of the gaussian phase'},
+                    {'title': 'dt (fs):', 'name': 'dtime', 'type': 'float', 'value': 10,
+                     'tip': 'FWHM (in fs) of the gaussian temporal phase'},
                 ]},
 
                 {'title': 'Data File:', 'name': 'data_file_path', 'type': 'browsepath', 'filetype': True,
@@ -406,14 +406,12 @@ class Simulator(QObject):
                 phase = GD * 1e-15 * pulse.w +\
                         GDD * 1e-30 * pulse.w ** 2 / 2 +\
                         TOD * 1e-45 * pulse.w ** 3 / 6
+                pulse.spectrum = pulse.spectrum * np.exp(1j * phase)
             elif self.settings.child('pulse_settings', 'shaping_type').value() == 'Gaussian':
                 amp = self.settings.child('pulse_settings', 'gaussian_phase', 'gauss_amp').value()
-                dlambda = self.settings.child('pulse_settings', 'gaussian_phase', 'dlambda').value()
-                domega = 2*np.pi*3e8 * dlambda * 1e-9 / pulse.wl0 ** 2
-                phase = amp * gauss1D(pulse.w, 0, domega)
-            # centered on wl0 (see Pulse(self.ft, wl0))
-            #pulse.field = gauss1D(pulse.t, x0=0, dx=fwhm * 1e-15)
-            pulse.spectrum = pulse.spectrum * np.exp(1j * phase)
+                dtime = self.settings.child('pulse_settings', 'gaussian_phase', 'dtime').value() *1e-15
+                phase = amp * gauss1D(pulse.t, 0, dtime)
+                pulse.field = pulse.field * np.exp(1j * phase)
 
             Npulses = self.settings.child('pulse_settings', 'npulses').value()
             if Npulses > 1:

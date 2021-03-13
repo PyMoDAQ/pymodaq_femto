@@ -22,7 +22,7 @@ from pymodaq.daq_utils.plotting.viewer1D.viewer1D_main import Viewer1D
 from pymodaq.daq_utils.plotting.viewer0D.viewer0D_main import Viewer0D
 from pymodaq.daq_utils.managers.roi_manager import LinearROI
 from pymodaq_femto.graphics import RetrievalResultPlot, MplCanvas, NavigationToolbar, MeshDataPlot, PulsePlot
-from pymodaq_femto.simulation import Simulator, methods, nlprocesses
+from pymodaq_femto.simulation import Simulator, methods, nlprocesses, materials
 from collections import OrderedDict
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
 from pypret.frequencies import om2wl, wl2om, convert
@@ -128,7 +128,8 @@ def substract_linear_phase(pulse):
 def mask(x, y, where, **kwargs):
     y = scipy.interpolate.interp1d(x[~where], y[~where], **kwargs)(x)
     return y
-
+params_simul = Simulator.params
+params_algo = utils.find_dict_in_list_from_key_val(params_simul, 'name', 'algo')
 
 class Retriever(QObject):
     """
@@ -136,13 +137,8 @@ class Retriever(QObject):
     """
     status_signal = pyqtSignal(str)
     retriever_signal = pyqtSignal(str)
-    params_in = [
+    params_in = [params_algo,
         {'title': 'Data Info', 'name': 'data_in_info', 'type': 'group', 'children': [
-            {'title': 'Trace type:', 'name': 'trace_type', 'type': 'list', 'values': methods,
-             'tip': 'Characterization technique used to obtain this trace'},
-            {'title': 'NL process:', 'name': 'nlprocess', 'type': 'list',
-             'values': nlprocesses,
-             'tip': 'Non Linear process used in the experiment'},
             {'title': 'Trace Info', 'name': 'trace_in_info', 'type': 'group', 'children': [
                 {'title': 'Wl0 (nm)', 'name': 'wl0', 'type': 'float', 'value': 0, 'readonly': True,
                  'tip': 'Central spectrum wavelength in nanometers'},
@@ -258,6 +254,8 @@ class Retriever(QObject):
         self.viewer_trace_in.ROI_select_signal.connect(self.update_ROI)
         self.viewer_trace_in.ROIselect_action.triggered.connect(self.show_ROI)
 
+        self.settings.child('algo', 'miips_parameter').hide()
+        self.settings.child('algo', 'dscan_parameter').hide()
 
     def create_menu(self, menubar):
         """
@@ -288,8 +286,19 @@ class Retriever(QObject):
                 pass
             elif change == 'value':
                 if param.name() == 'method':
-                    self.settings.child('algo',
-                                                'nlprocess').setLimits(list(_PNPS_CLASSES[param.value()].keys()))
+                    self.settings.child('algo', 'nlprocess').setLimits(list(_PNPS_CLASSES[param.value()].keys()))
+
+                    if param.value() == 'miips':
+                        self.settings.child('algo', 'alpha').show()
+                        self.settings.child('algo', 'gamma').show()
+                    else:
+                        self.settings.child('algo', 'alpha').hide()
+                        self.settings.child('algo', 'gamma').hide()
+                    if param.value() == 'dscan':
+                        self.settings.child('algo', 'material').show()
+                    else:
+                        self.settings.child('algo', 'material').hide()
+
 
                 elif param.name() in putils.iter_children(self.settings.child('processing', 'ROIselect'),
                                                           []) and 'ROIselect' in param.parent().name():  # to be sure
@@ -328,7 +337,25 @@ class Retriever(QObject):
                     pos_pxl, y = self.viewer_trace_in.unscale_axis(np.array(pos_real), np.array([0, 1]))
                     self.linear_region.setPos(pos_pxl)
                     self.linear_region.sigRegionChangeFinished.connect(self.update_linear)
+                    
+                elif param.name() == 'method':
+                    self.settings.child('algo', 'nlprocess').setLimits(list(_PNPS_CLASSES[param.value()].keys()))
 
+                    if param.value() == 'miips':
+                        self.settings.child('algo', 'alpha').show()
+                        self.settings.child('algo', 'gamma').show()
+                        self.settings.child('algo', 'miips_parameter').show()
+                    else:
+                        self.settings.child('algo', 'alpha').hide()
+                        self.settings.child('algo', 'gamma').hide()
+                        self.settings.child('algo', 'miips_parameter').hide()
+
+                    if param.value() == 'dscan':
+                        self.settings.child('algo', 'material').show()
+                        self.settings.child('algo', 'dscan_parameter').show()
+                    else:
+                        self.settings.child('algo', 'material').hide()
+                        self.settings.child('algo', 'dscan_parameter').hide()
 
 
     def quit_fun(self):
@@ -434,7 +461,6 @@ class Retriever(QObject):
         self.ui.dock_data_in.addWidget(data_in_splitter)
 
         self.settings_tree.setParameters(self.settings, showTop=False)
-        self.settings.sigTreeStateChanged.connect(self.data_in_settings_changed)
 
         # #################################################
         # setup retriever dock
@@ -444,12 +470,16 @@ class Retriever(QObject):
         self.viewer_live_trace.aspect_ratio_action.trigger()
         #self.viewer_live_trace.auto_levels_action.trigger()
         self.viewer_live_time = Viewer1D()
+        self.viewer_live_lambda = Viewer1D()
         self.info_widget = QtWidgets.QTextEdit()
         self.info_widget.setReadOnly(True)
 
+        vsplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.ui.dock_retriever.addWidget(retriever_widget)
         retriever_widget.addWidget(self.viewer_live_trace.parent)
-        retriever_widget.addWidget(self.viewer_live_time.parent)
+        vsplitter.addWidget(self.viewer_live_time.parent)
+        vsplitter.addWidget(self.viewer_live_lambda.parent)
+        retriever_widget.addWidget(vsplitter)
         retriever_widget.addWidget(self.info_widget)
 
         #####################################
@@ -510,7 +540,12 @@ class Retriever(QObject):
             self.display_data_in()
             self.update_spectrum_info(self.data_in['raw_spectrum'])
             self.update_trace_info(self.data_in['raw_trace'])
-            #self.viewer_trace_in.ROIselect_action.trigger()
+
+            for child in putils.iter_children_params(self.settings.child('algo'), childlist=[]):
+                path = ['algo']
+                path.extend(self.settings.child('algo').childPath(child))
+                self.settings.child(*path).setValue(self.simulator.settings.child(*path).value())
+
 
     def update_spectrum_info(self, raw_spectrum):
         wl0, fwhm = utils.my_moment(raw_spectrum['axis']['data'], raw_spectrum['data'])
@@ -535,7 +570,7 @@ class Retriever(QObject):
         self.settings.child('processing', 'grid_settings',
                                     'npoints').setValue(len(raw_trace['parameter_axis']['data']))
 
-        method = self.settings.child('data_in_info', 'trace_type').value()
+        method = self.settings.child('algo', 'method').value()
         if not (method == 'dscan' or method == 'miips'):
             self.settings.child('processing', 'grid_settings',
                                         'time_resolution').setValue(np.mean(
@@ -597,8 +632,8 @@ class Retriever(QObject):
         self.ui.dock_processed.raiseDock()
 
         self.generate_ft_grid()
-        method = self.settings.child('data_in_info', 'trace_type').value()
-        nlprocess = self.settings.child('data_in_info', 'nlprocess').value()
+        method = self.settings.child('algo', 'method').value()
+        nlprocess = self.settings.child('algo', 'nlprocess').value()
         wl0 = self.settings.child('data_in_info', 'trace_in_info', 'wl0').value() * 1e-9
         spectrum = self.data_in['raw_spectrum']['data']
         wavelength = self.data_in['raw_spectrum']['axis']['data']
@@ -617,7 +652,25 @@ class Retriever(QObject):
             spectrum = mask(wavelength, spectrum, (range[0] <= wavelength) & (wavelength <= range[1]))
 
         self.data_in['pulse_in'] = pulse_from_spectrum(wavelength, spectrum, pulse=self.data_in['pulse_in'])
-        self.pnps = PNPS(self.data_in['pulse_in'], method, nlprocess)
+       #self.pnps = PNPS(self.data_in['pulse_in'], method, nlprocess)
+
+        if method == 'dscan':
+            material = materials[self.settings.child('algo', 'material').value()]
+            self.pnps = PNPS(self.data_in['pulse_in'], method, nlprocess, material=material)
+            parameter = utils.linspace_step(self.settings.child('algo', 'dscan_parameter', 'min').value(),
+                                      self.settings.child('algo', 'dscan_parameter', 'max').value(),
+                                      self.settings.child('algo', 'dscan_parameter', 'step').value())
+            parameter *= 1e-3
+        elif method == 'miips':
+            alpha = self.settings.child('algo', 'alpha').value()
+            gamma = self.settings.child('algo', 'gamma').value()
+            self.pnps = PNPS(self.data_in['pulse_in'], method, nlprocess, alpha=alpha, gamma=gamma)
+            parameter = utils.linspace_step(self.settings.child('algo', 'miips_parameter', 'min').value(),
+                                      self.settings.child('algo', 'miips_parameter', 'max').value(),
+                                      self.settings.child('algo', 'miips_parameter', 'step').value())
+        else:
+            self.pnps = PNPS(self.data_in['pulse_in'], method, nlprocess)
+
 
         self.pulse_canvas.figure.clf()
         PulsePlot(self.data_in['pulse_in'], self.pulse_canvas.figure)
@@ -666,7 +719,12 @@ class Retriever(QObject):
         self.data_in['pulse_in'].spectrum = args[3]
         #self.data_in['pulse_in'] = substract_linear_phase(self.data_in['pulse_in'])
         self.viewer_live_time.show_data([np.abs(self.data_in['pulse_in'].field)**2],
-                                        x_axis=utils.Axis(data=self.data_in['pulse_in'].t, label='Time', unit='s'))
+                                        x_axis=utils.Axis(data=self.data_in['pulse_in'].t, label='Time', unit='s'),
+                                        labels=['Temporal Intensity'])
+        self.viewer_live_lambda.show_data([np.abs(self.data_in['pulse_in'].spectrum)**2],
+                                        x_axis=utils.Axis(data=self.data_in['pulse_in'].wl, label='Wavelength',
+                                                          unit='m'),
+                                        labels=['Spectral Intensity'])
 
     @pyqtSlot(SimpleNamespace)
     def display_results(self, result):
@@ -730,7 +788,7 @@ class Retriever(QObject):
         self.update_ROI(QtCore.QRectF(pos[0], pos[1], size[0], size[1]))
 
     def get_trace_in(self):
-        method = self.settings.child('data_in_info', 'trace_type').value()
+        method = self.settings.child('algo', 'method').value()
         if method == 'dscan':
             label = 'Insertion'
             unit = 'm'
@@ -845,17 +903,6 @@ class Retriever(QObject):
         self.display_trace_in()
         self.display_spectrum_in()
 
-    def data_in_settings_changed(self, param, changes):
-        for param, change, data in changes:
-            if change == 'childAdded':
-                pass
-
-            elif change == 'value':
-                pass
-
-            elif change == 'parent':
-                pass
-
 
 class RetrieverWorker(QObject):
     result_signal = pyqtSignal(SimpleNamespace)
@@ -914,10 +961,10 @@ def main():
 
     prog = Retriever(dashboard=None, dockarea=area)
     win.show()
-    prog.load_trace_in(fname='C:\\Data\\2021\\20210312\\Dataset_20210312_000\\Dataset_20210312_000.h5',
-                        node_path='/Raw_datas/Scan000/Detector000/Data1D/Ch000/Data')
-    prog.load_spectrum_in(fname='C:\\Users\\weber\\Desktop\\pulse.h5',
-                        node_path='/Raw_datas/Detector000/Data1D/Ch000/Data')
+    # prog.load_trace_in(fname='C:\\Data\\2021\\20210313\\Dataset_20210313_000\\Dataset_20210313_000.h5',
+    #                     node_path='/Raw_datas/Scan001/Detector000/Data1D/Ch000/Data')
+    # prog.load_spectrum_in(fname='C:\\Users\\weber\\Desktop\\pulse.h5',
+    #                     node_path='/Raw_datas/Detector000/Data1D/Ch000/Data')
 
     sys.exit(app.exec_())
 

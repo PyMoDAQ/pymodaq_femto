@@ -438,8 +438,6 @@ class Simulator(QObject):
         return pulse
 
 
-
-
 def main():
     import sys
 

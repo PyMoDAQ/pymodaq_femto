@@ -15,7 +15,7 @@ from pyqtgraph.dockarea import Dock
 from pyqtgraph.parametertree import Parameter, ParameterTree
 from pymodaq.daq_utils import daq_utils as utils
 from pymodaq.daq_utils import gui_utils as gutils
-from pymodaq.daq_utils.parameter import utils as putils
+from pymodaq.daq_utils.parameter import utils as putils, ioxml
 from pymodaq.daq_utils.h5modules import browse_data
 from pymodaq.daq_utils.plotting.viewer2D.viewer2D_main import Viewer2D
 from pymodaq.daq_utils.plotting.viewer1D.viewer1D_main import Viewer1D
@@ -28,7 +28,7 @@ from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
 from pypret.frequencies import om2wl, wl2om, convert
 import scipy
 from scipy.fftpack import next_fast_len
-from pymodaq.daq_utils.h5modules import H5BrowserUtil
+from pymodaq.daq_utils.h5modules import H5BrowserUtil, H5Saver
 from pyqtgraph.graphicsItems.GradientEditorItem import Gradients
 from pymodaq_femto import _PNPS_CLASSES
 from pypret.retrieval.retriever import _RETRIEVER_CLASSES
@@ -139,6 +139,10 @@ class Retriever(QObject):
     retriever_signal = pyqtSignal(str)
     params_in = [params_algo,
         {'title': 'Data Info', 'name': 'data_in_info', 'type': 'group', 'children': [
+            {'title': 'Loaded file:', 'name': 'loaded_file', 'type': 'text', 'value': "", 'readonly': True,
+             'tip': 'Loaded trace file'},
+            {'title': 'Loaded node:', 'name': 'loaded_node', 'type': 'str', 'value': "", 'readonly': True,
+             'tip': 'Loaded node within trace file'},
             {'title': 'Trace Info', 'name': 'trace_in_info', 'type': 'group', 'children': [
                 {'title': 'Wl0 (nm)', 'name': 'wl0', 'type': 'float', 'value': 0, 'readonly': True,
                  'tip': 'Central spectrum wavelength in nanometers'},
@@ -245,6 +249,7 @@ class Retriever(QObject):
         self.retriever = None
         self.pnps = None
         self.retriever_thread = None
+        self.save_file_pathname = None
         self.settings.child('processing', 'process_trace').sigActivated.connect(self.process_trace)
         self.settings.child('processing', 'process_spectrum').sigActivated.connect(self.process_spectrum)
         self.settings.child('processing', 'process_both').sigActivated.connect(self.process_both)
@@ -256,6 +261,30 @@ class Retriever(QObject):
 
         self.settings.child('algo', 'miips_parameter').hide()
         self.settings.child('algo', 'dscan_parameter').hide()
+
+    def save_data(self, save_file_pathname=None):
+        try:
+            if save_file_pathname is None:
+                save_file_pathname = gutils.select_file(start_path=self.save_file_pathname, save=True,
+                                                        ext='h5')  # see daq_utils
+            h5saver = H5Saver(save_type='custom')
+            h5saver.init_file(update_h5=True, custom_naming=False, addhoc_file_path=save_file_pathname,
+                              raw_group_name='PyMoDAQFemtoAnalysis')
+
+            settings_str = b'<All_settings>' + ioxml.parameter_to_xml_string(self.settings)
+            settings_str += b'</All_settings>'
+            # TODO
+            h5saver.set_attr(h5saver.raw_group, 'settings', settings_str)
+            data_in_group = h5saver.get_set_group(h5saver.raw_group, "DataIn")
+            trace_group = h5saver.get_set_group(data_in_group, 'NLTrace')
+            spectrum_group = h5saver.get_set_group(data_in_group, 'FunSpectrum')
+            h5saver.add_data(trace_group, self.data_in['raw_trace'], scan_type='')
+            h5saver.add_data(spectrum_group, self.data_in['raw_spectrum'], scan_type='')
+
+        except Exception as e:
+            pass
+
+        h5saver.close_file()
 
     def create_menu(self, menubar):
         """
@@ -426,15 +455,21 @@ class Retriever(QObject):
         self.load_from_simulation_action = gutils.QAction(QIcon(QPixmap(":/icons/Icon_Library/Open_sim.png")),
                                                   'Load Data from Simulation')
 
+        self.save_data_action = gutils.QAction(QIcon(QPixmap(":/icons/Icon_Library/Save.png")),
+                                                  'Save Data')
+
         self.load_trace_in_action.triggered.connect(self.load_trace_in)
         self.load_spectrum_in_action.triggered.connect(self.load_spectrum_in)
         self.gen_trace_in_action.triggered.connect(self.open_simulator)
         self.load_from_simulation_action.triggered.connect(self.load_from_simulator)
+        self.save_data_action.triggered.connect(self.save_data)
 
         self.toolbar.addAction(self.load_trace_in_action)
         self.toolbar.addAction(self.load_spectrum_in_action)
         self.toolbar.addAction(self.gen_trace_in_action)
         self.toolbar.addAction(self.load_from_simulation_action)
+        self.toolbar.addSeparator()
+        self.toolbar.addAction(self.save_data_action)
         
         
         # ######################################################
@@ -545,10 +580,10 @@ class Retriever(QObject):
                 path = ['algo']
                 path.extend(self.settings.child('algo').childPath(child))
                 self.settings.child(*path).setValue(self.simulator.settings.child(*path).value())
-
+            self.settings.child('data_in_info', 'loaded_file').setValue('Simulation')
 
     def update_spectrum_info(self, raw_spectrum):
-        wl0, fwhm = utils.my_moment(raw_spectrum['axis']['data'], raw_spectrum['data'])
+        wl0, fwhm = utils.my_moment(raw_spectrum['x_axis']['data'], raw_spectrum['data'])
         self.settings.child('data_in_info', 'spectrum_in_info', 'wl0').setValue(wl0 * 1e9)
         self.settings.child('data_in_info', 'spectrum_in_info', 'wl_fwhm').setValue(fwhm * 1e9)
         self.settings.child('data_in_info', 'spectrum_in_info',
@@ -557,24 +592,24 @@ class Retriever(QObject):
         self.settings.child('processing', 'grid_settings', 'wl0').setValue(wl0 * 1e9)
 
     def update_trace_info(self, raw_trace):
-        wl0, fwhm = utils.my_moment(raw_trace['axis']['data'], np.sum(raw_trace['data'], 0))
+        wl0, fwhm = utils.my_moment(raw_trace['x_axis']['data'], np.sum(raw_trace['data'], 0))
         self.settings.child('data_in_info', 'trace_in_info', 'wl0').setValue(wl0 * 1e9)
         self.settings.child('data_in_info', 'trace_in_info', 'wl_fwhm').setValue(fwhm * 1e9)
 
         self.settings.child('data_in_info', 'trace_in_info', 'trace_param_size').setValue(
-            len(raw_trace['parameter_axis']))
+            len(raw_trace['y_axis']))
         self.settings.child('data_in_info', 'trace_in_info',
-                                    'trace_wl_size').setValue(len(raw_trace['axis']['data']))
+                                    'trace_wl_size').setValue(len(raw_trace['x_axis']['data']))
 
 
         self.settings.child('processing', 'grid_settings',
-                                    'npoints').setValue(len(raw_trace['parameter_axis']['data']))
+                                    'npoints').setValue(len(raw_trace['y_axis']['data']))
 
         method = self.settings.child('algo', 'method').value()
         if not (method == 'dscan' or method == 'miips'):
             self.settings.child('processing', 'grid_settings',
                                         'time_resolution').setValue(np.mean(
-                np.diff(raw_trace['parameter_axis']['data'])) * 1e15)
+                np.diff(raw_trace['y_axis']['data'])) * 1e15)
 
     def generate_ft_grid(self):
         wl0 = self.settings.child('processing', 'grid_settings', 'wl0').value() * 1e-9
@@ -636,7 +671,7 @@ class Retriever(QObject):
         nlprocess = self.settings.child('algo', 'nlprocess').value()
         wl0 = self.settings.child('data_in_info', 'trace_in_info', 'wl0').value() * 1e-9
         spectrum = self.data_in['raw_spectrum']['data']
-        wavelength = self.data_in['raw_spectrum']['axis']['data']
+        wavelength = self.data_in['raw_spectrum']['x_axis']['data']
 
         if 'shg' in nlprocess:
             wl0real = 2 * wl0
@@ -728,11 +763,12 @@ class Retriever(QObject):
 
     @pyqtSlot(SimpleNamespace)
     def display_results(self, result):
+        self.result = result
         self.ui.dock_retrieved_data.raiseDock()
 
         self.data_in['pulse_in'].spectrum = result.pulse_retrieved
         fundamental = self.data_in['raw_spectrum']['data']
-        wavelength = self.data_in['raw_spectrum']['axis']['data']
+        wavelength = self.data_in['raw_spectrum']['x_axis']['data']
         fundamental *= (wavelength * wavelength)
         spec = self.data_in['pulse_in'].spectral_intensity
         spec = scipy.interpolate.interp1d(self.data_in['pulse_in'].wl, spec,
@@ -800,15 +836,15 @@ class Retriever(QObject):
             unit = 's'
 
         self.data_in['trace_in'] = MeshData(self.data_in['raw_trace']['data'],
-                                            self.data_in['raw_trace']['parameter_axis']['data'],
-                                            self.data_in['raw_trace']['axis']['data'],
+                                            self.data_in['raw_trace']['y_axis']['data'],
+                                            self.data_in['raw_trace']['x_axis']['data'],
                                             labels=[label, "wavelength"], units=[unit, "m"])
 
         return self.data_in['trace_in']
 
     def get_pulse_in(self):
 
-        self.data_in['pulse_in'] = pulse_from_spectrum(self.data_in['raw_spectrum']['axis']['data'],
+        self.data_in['pulse_in'] = pulse_from_spectrum(self.data_in['raw_spectrum']['x_axis']['data'],
                                                        self.data_in['raw_spectrum']['data'])
 
 
@@ -829,6 +865,9 @@ class Retriever(QObject):
                                                                            'Charaterization Trace')
 
             if fname != '':
+                self.save_file_pathname = fname
+                self.settings.child('data_in_info', 'loaded_file').setValue(fname)
+                self.settings.child('data_in_info', 'loaded_node').setValue(node_path)
                 wl, parameter_axis = self.get_axes_from_trace_node(fname, node_path)
                 if self.data_in is None:
                     self.data_in = DataIn(source='experimental')
@@ -843,7 +882,9 @@ class Retriever(QObject):
                 parameter_axis['data'] *= scaling_parameter
                 parameter_axis['units'] = 'p.u.'
 
-                self.data_in.update(dict(raw_trace={'data': data, 'axis': wl, 'parameter_axis': parameter_axis}))
+                self.data_in.update(dict(raw_trace={'data': data, 'x_axis': wl, 'y_axis': parameter_axis},
+                                         file_path=fname,
+                                         node_path=node_path))
 
 
                 #
@@ -884,19 +925,19 @@ class Retriever(QObject):
 
         if self.data_in is None:
             self.data_in = DataIn(source='experimental')
-        self.data_in.update(dict(raw_spectrum={'data': data, 'axis': axes['x_axis']}))
+        self.data_in.update(dict(raw_spectrum={'data': data, 'x_axis': axes['x_axis']}))
 
         self.update_spectrum_info(self.data_in['raw_spectrum'])
         self.display_spectrum_in()
 
     def display_trace_in(self):
         self.viewer_trace_in.setImage(self.data_in['raw_trace']['data'])
-        self.viewer_trace_in.x_axis = self.data_in['raw_trace']['axis']
-        self.viewer_trace_in.y_axis = self.data_in['raw_trace']['parameter_axis']
+        self.viewer_trace_in.x_axis = self.data_in['raw_trace']['x_axis']
+        self.viewer_trace_in.y_axis = self.data_in['raw_trace']['y_axis']
         
     def display_spectrum_in(self):
         self.viewer_spectrum_in.show_data([self.data_in['raw_spectrum']['data']],
-                                          x_axis=self.data_in['raw_spectrum']['axis'],
+                                          x_axis=self.data_in['raw_spectrum']['x_axis'],
                                           labels=['Spectrum'])
 
     def display_data_in(self):
@@ -961,11 +1002,11 @@ def main():
 
     prog = Retriever(dashboard=None, dockarea=area)
     win.show()
-    # prog.load_trace_in(fname='C:\\Data\\2021\\20210313\\Dataset_20210313_000\\Dataset_20210313_000.h5',
-    #                     node_path='/Raw_datas/Scan001/Detector000/Data1D/Ch000/Data')
-    # prog.load_spectrum_in(fname='C:\\Users\\weber\\Desktop\\pulse.h5',
-    #                     node_path='/Raw_datas/Detector000/Data1D/Ch000/Data')
-
+    prog.load_trace_in(fname='C:\\Data\\2021\\20210315\\Dataset_20210315_001\\Dataset_20210315_001.h5',
+                        node_path='/Raw_datas/Scan001/Detector000/Data1D/Ch000/Data')
+    prog.load_spectrum_in(fname='C:\\Users\\weber\\Desktop\\pulse.h5',
+                        node_path='/Raw_datas/Detector000/Data1D/Ch000/Data')
+    prog.save_data('C:\\Users\\weber\\Desktop\\pulse_analysis.h5')
     sys.exit(app.exec_())
 
 

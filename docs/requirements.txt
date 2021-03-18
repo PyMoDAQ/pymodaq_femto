@@ -1,0 +1,6 @@
+releases
+sphinx-csv-filter
+numpy==1.19.3
+pillow
+toml
+pyqt5

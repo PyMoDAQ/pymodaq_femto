@@ -1002,11 +1002,14 @@ def main():
 
     prog = Retriever(dashboard=None, dockarea=area)
     win.show()
-    prog.load_trace_in(fname='C:\\Data\\2021\\20210315\\Dataset_20210315_001\\Dataset_20210315_001.h5',
-                        node_path='/Raw_datas/Scan001/Detector000/Data1D/Ch000/Data')
-    prog.load_spectrum_in(fname='C:\\Users\\weber\\Desktop\\pulse.h5',
-                        node_path='/Raw_datas/Detector000/Data1D/Ch000/Data')
-    prog.save_data('C:\\Users\\weber\\Desktop\\pulse_analysis.h5')
+    try:
+        prog.load_trace_in(fname='C:\\Data\\2021\\20210315\\Dataset_20210315_001\\Dataset_20210315_001.h5',
+                            node_path='/Raw_datas/Scan001/Detector000/Data1D/Ch000/Data')
+        prog.load_spectrum_in(fname='C:\\Users\\weber\\Desktop\\pulse.h5',
+                            node_path='/Raw_datas/Detector000/Data1D/Ch000/Data')
+        prog.save_data('C:\\Users\\weber\\Desktop\\pulse_analysis.h5')
+    except:
+        pass
     sys.exit(app.exec_())
 
 

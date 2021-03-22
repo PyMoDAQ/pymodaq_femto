@@ -569,8 +569,8 @@ class Retriever(QObject):
                 self.data_in = DataIn(source='simulated')
 
             self.data_in.update(dict(source='simulated',
-                                     raw_spectrum=dict(data=spectrum, axis=spectrum_axis),
-                                     raw_trace=dict(data=data, axis=axis, parameter_axis=parameter_axis)))
+                                     raw_spectrum=dict(data=spectrum, x_axis=spectrum_axis),
+                                     raw_trace=dict(data=data, x_axis=axis, y_axis=parameter_axis)))
 
             self.display_data_in()
             self.update_spectrum_info(self.data_in['raw_spectrum'])

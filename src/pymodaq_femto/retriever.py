@@ -261,6 +261,8 @@ class Retriever(QObject):
 
         self.settings.child('algo', 'miips_parameter').hide()
         self.settings.child('algo', 'dscan_parameter').hide()
+        self.settings.child('algo', 'alpha').hide()
+        self.settings.child('algo', 'gamma').hide()
 
     def save_data(self, save_file_pathname=None):
         try:
@@ -757,17 +759,17 @@ class Retriever(QObject):
         self.viewer_live_trace.ui.histogram_red.setHistogramRange(-max, max)
         self.viewer_live_trace.ui.histogram_red.setLevels(-max, max)
         self.viewer_live_trace.setImage(args[0])
-        self.viewer_live_trace.x_axis = utils.Axis(data=args[2], label='Time', unit='s')
-        self.viewer_live_trace.y_axis = utils.Axis(data=args[1], label='Frequency', unit='m')
+        self.viewer_live_trace.x_axis = utils.Axis(data=args[2], label='Time', units='s')
+        self.viewer_live_trace.y_axis = utils.Axis(data=args[1], label='Frequency', units='m')
 
         self.data_in['pulse_in'].spectrum = args[3]
         #self.data_in['pulse_in'] = substract_linear_phase(self.data_in['pulse_in'])
         self.viewer_live_time.show_data([np.abs(self.data_in['pulse_in'].field)**2],
-                                        x_axis=utils.Axis(data=self.data_in['pulse_in'].t, label='Time', unit='s'),
+                                        x_axis=utils.Axis(data=self.data_in['pulse_in'].t, label='Time', units='s'),
                                         labels=['Temporal Intensity'])
         self.viewer_live_lambda.show_data([np.abs(self.data_in['pulse_in'].spectrum)**2],
                                         x_axis=utils.Axis(data=self.data_in['pulse_in'].wl, label='Wavelength',
-                                                          unit='m'),
+                                                          units='m'),
                                         labels=['Spectral Intensity'])
 
     @pyqtSlot(SimpleNamespace)
@@ -778,7 +780,7 @@ class Retriever(QObject):
         self.data_in['pulse_in'].spectrum = result.pulse_retrieved
         fundamental = self.data_in['raw_spectrum']['data']
         wavelength = self.data_in['raw_spectrum']['x_axis']['data']
-        fundamental *= (wavelength * wavelength)
+        #fundamental *= (wavelength * wavelength)
         spec = self.data_in['pulse_in'].spectral_intensity
         spec = scipy.interpolate.interp1d(self.data_in['pulse_in'].wl, spec,
                                           bounds_error=False,
@@ -872,7 +874,7 @@ class Retriever(QObject):
             wl = utils.Axis(data=viewer.y_axis_scaled.copy(),
                             label=viewer.scaling_options['scaled_yaxis']['label'],
                             units=viewer.scaling_options['scaled_yaxis']['units'])
-            data = self.dashboard.scan_module.scan_data_2D[0].copy()
+            data = self.dashboard.scan_module.scan_data_2D[0].T.copy()
 
             self.set_data_in_exp(data, wl, parameter_axis)
         except Exception as e:

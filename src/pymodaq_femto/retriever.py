@@ -446,6 +446,14 @@ class Retriever(QObject):
         # setup toolbar
         self.toolbar = QtWidgets.QToolBar()
         self.mainwindow.addToolBar(self.toolbar)
+        if self.dashboard is not None:
+            if self.dashboard.scan_module is not None:
+                self.load_last_scan_action = gutils.QAction(QIcon(QPixmap(":/icons/Icon_Library/Open_2D.png")),
+                                                           'Load last 2D scan')
+                self.toolbar.addAction(self.load_last_scan_action)
+                self.toolbar.addSeparator()
+                self.load_last_scan_action.triggered.connect(self.load_last_scan)
+
         self.load_trace_in_action = gutils.QAction(QIcon(QPixmap(":/icons/Icon_Library/Open_2D.png")),
                                                    'Load Experimental Trace')
         self.load_spectrum_in_action = gutils.QAction(QIcon(QPixmap(":/icons/Icon_Library/Open_1D.png")),
@@ -466,6 +474,7 @@ class Retriever(QObject):
 
         self.toolbar.addAction(self.load_trace_in_action)
         self.toolbar.addAction(self.load_spectrum_in_action)
+        self.toolbar.addSeparator()
         self.toolbar.addAction(self.gen_trace_in_action)
         self.toolbar.addAction(self.load_from_simulation_action)
         self.toolbar.addSeparator()
@@ -854,6 +863,21 @@ class Retriever(QObject):
         self.h5browse.close_file()
         return axes['x_axis'], axes['nav_00']
 
+    def load_last_scan(self):
+        try:
+            viewer = self.dashboard.scan_module.ui.scan2D_graph
+            parameter_axis = utils.Axis(data=viewer.x_axis_scaled.copy(),
+                                        label=viewer.scaling_options['scaled_xaxis']['label'],
+                                        units=viewer.scaling_options['scaled_xaxis']['units'])
+            wl = utils.Axis(data=viewer.y_axis_scaled.copy(),
+                            label=viewer.scaling_options['scaled_yaxis']['label'],
+                            units=viewer.scaling_options['scaled_yaxis']['units'])
+            data = self.dashboard.scan_module.scan_data_2D[0].copy()
+
+            self.set_data_in_exp(data, wl, parameter_axis)
+        except Exception as e:
+            pass
+
     def load_trace_in(self, fname=None, node_path=None):
         try:
             if fname is not None and node_path is not None:
@@ -869,43 +893,34 @@ class Retriever(QObject):
                 self.settings.child('data_in_info', 'loaded_file').setValue(fname)
                 self.settings.child('data_in_info', 'loaded_node').setValue(node_path)
                 wl, parameter_axis = self.get_axes_from_trace_node(fname, node_path)
-                if self.data_in is None:
-                    self.data_in = DataIn(source='experimental')
-
-                scaling_parameter = self.settings.child('data_in_info',
-                                                                'trace_in_info', 'param_scaling').value()
-                scaling_wl = self.settings.child('data_in_info', 'trace_in_info', 'wl_scaling').value()
-
-                wl['units'] = 'm'
-                wl['data'] *= scaling_wl
-
-                parameter_axis['data'] *= scaling_parameter
-                parameter_axis['units'] = 'p.u.'
-
-                self.data_in.update(dict(raw_trace={'data': data, 'x_axis': wl, 'y_axis': parameter_axis},
-                                         file_path=fname,
-                                         node_path=node_path))
-
-
-                #
-                # trace_in = MeshData(data, parameter_axis['data'] * scaling_parameter, wl['data'] * scaling_wl,
-                #                          labels=[parameter_axis['label'], wl['label']],
-                #                          units=['s', 'm'])
-                self.update_trace_info(self.data_in['raw_trace'])
-
-                # dt = np.mean(np.diff(parameter_axis['data'])) * scaling_parameter
-                # wl0 = self.settings.child('data_in_info', 'trace_in_info', 'wl0').value() * 1e-9
-                # ft = FourierTransform(len(parameter_axis['data']), dt, w0=wl2om(-wl0 - 300e-9))
-                # self.data_in = DataIn(name='data_in', source='experimental', trace_in=trace_in,
-                #                       pulse_in=Pulse(ft, self.settings.child('data_in_info',
-                #                                                                        'trace_in_info',
-                #                                                                        'wl0').value() * scaling_wl))
-
-                self.display_trace_in()
-                self.viewer_trace_in.ROIselect_action.trigger()
+                self.set_data_in_exp(data, wl, parameter_axis, fname, node_path)
 
         except Exception as e:
             logger.exception(str(e))
+
+    def set_data_in_exp(self, data, wl, parameter_axis, fname='', node_path=''):
+        if self.data_in is None:
+            self.data_in = DataIn(source='experimental')
+
+        scaling_parameter = self.settings.child('data_in_info',
+                                                        'trace_in_info', 'param_scaling').value()
+        scaling_wl = self.settings.child('data_in_info', 'trace_in_info', 'wl_scaling').value()
+
+        wl['units'] = 'm'
+        wl['data'] *= scaling_wl
+
+        parameter_axis['data'] *= scaling_parameter
+        parameter_axis['units'] = 'p.u.'
+
+        self.data_in.update(dict(raw_trace={'data': data, 'x_axis': wl, 'y_axis': parameter_axis},
+                                 file_path=fname,
+                                 node_path=node_path))
+
+        self.update_trace_info(self.data_in['raw_trace'])
+
+        self.display_trace_in()
+        self.viewer_trace_in.ROIselect_action.trigger()
+
 
     def load_spectrum_in(self, fname=None, node_path=None):
         if fname is not None and node_path is not None:

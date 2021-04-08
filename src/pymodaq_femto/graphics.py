@@ -16,6 +16,30 @@ class MplCanvas(FigureCanvasQTAgg):
         fig = Figure(figsize=(width, height), dpi=dpi)
         super().__init__(fig)
 
+class PulseSimpleTimePlot:
+    def __init__(self, t, I, fig=None, plot=True, **kwargs):
+        self.t = t
+        self.I = I
+        self.fig = fig
+        if plot:
+            self.plot(**kwargs)
+
+    def plot(self, xaxis='time', yaxis='intensity', limit=True,
+             oversampling=False, show=True):
+
+
+        if self.fig is None:
+            fig, axs = plt.subplots(1, 1)
+        else:
+            ax1 = self.fig.subplots(1,1)
+
+        ax1.plot(self.t,self.I)
+        fx = EngFormatter(unit="s")
+        ax1.xaxis.set_major_formatter(fx)
+        ax1.set_title("time domain")
+        ax1.set_xlabel(xaxis)
+        ax1.set_ylabel(yaxis)
+
 
 class PulsePlot:
 

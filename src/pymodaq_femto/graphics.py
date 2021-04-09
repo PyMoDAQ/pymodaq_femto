@@ -120,12 +120,35 @@ class PulsePlot:
             fig.tight_layout()
         #     plt.show()
 
+class PulsePropagationPlot(PulsePlot):
+    def __init__(self, pulse, polynomial, fig=None, plot=True, **kwargs):
+        self.polynomial = polynomial
+        self.pulse = pulse
+        self.fig = fig
+        if plot:
+            self.plot(**kwargs)
+
+    def plot(self, xaxis='wavelength', yaxis='intensity', limit=True,
+             oversampling=False, phase_blanking=False,
+             phase_blanking_threshold=1e-3, show=True):
+        super().plot(xaxis='wavelength', yaxis='intensity', limit=True,
+             oversampling=False, phase_blanking=False,
+             phase_blanking_threshold=1e-3, show=True)
+        if xaxis == "wavelength":
+            w = convert(self.pulse.w + self.pulse.w0, "om", "wl")
+        elif xaxis == "frequency":
+            w = self.pulse.w
+        self.ax22.plot(w, np.poly1d(self.polynomial)(self.pulse.w), '--')
+        if show:
+            self.fig.tight_layout()
+
 
 class MeshDataPlot:
 
-    def __init__(self, mesh_data, fig=None, plot=True, **kwargs):
+    def __init__(self, mesh_data, fig=None, plot=True, limit=False, **kwargs):
         self.md = mesh_data
         self.fig = fig
+        self.limit = limit
         if plot:
             self.plot(**kwargs)
 
@@ -139,6 +162,8 @@ class MeshDataPlot:
 
         im = plot_meshdata(ax, md, "nipy_spectral", **kwargs)
         fig.colorbar(im, ax=ax)
+        if self.limit:
+            ax.set_xlim(lib.limit(md.axes[1], md.marginals(axes=1)))
 
         self.fig, self.ax = fig, ax
         self.im = im

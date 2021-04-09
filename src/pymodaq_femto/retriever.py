@@ -21,7 +21,7 @@ from pymodaq.daq_utils.plotting.viewer2D.viewer2D_main import Viewer2D
 from pymodaq.daq_utils.plotting.viewer1D.viewer1D_main import Viewer1D
 from pymodaq.daq_utils.plotting.viewer0D.viewer0D_main import Viewer0D
 from pymodaq.daq_utils.managers.roi_manager import LinearROI
-from pymodaq_femto.graphics import RetrievalResultPlot, MplCanvas, NavigationToolbar, MeshDataPlot, PulsePlot, PulseSimpleTimePlot
+from pymodaq_femto.graphics import RetrievalResultPlot, MplCanvas, NavigationToolbar, MeshDataPlot, PulsePlot, PulsePropagationPlot
 from pymodaq_femto.simulation import Simulator, methods, nlprocesses, materials
 from collections import OrderedDict
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
@@ -33,6 +33,7 @@ from pymodaq.daq_utils.h5modules import H5BrowserUtil, H5Saver
 from pyqtgraph.graphicsItems.GradientEditorItem import Gradients
 from pymodaq_femto import _PNPS_CLASSES
 from pypret.retrieval.retriever import _RETRIEVER_CLASSES
+import warnings
 
 retriever_algos = list(_RETRIEVER_CLASSES.keys())
 
@@ -121,10 +122,16 @@ def preprocess2(trace, pnps):
 
 def substract_linear_phase(pulse):
     phase = np.unwrap(np.angle(pulse.spectrum))
+    intensity = np.abs(pulse.spectrum)
     z = np.polyfit(pulse.w, phase, 1)
     pulse.spectrum *= np.exp(- 1j * np.poly1d(z)(pulse.w))
     return pulse
-    
+
+def fit_pulse_phase(pulse, delta, order):
+    phase = np.unwrap(np.angle(pulse.spectrum))
+    fitarea = (pulse.wl > pulse.wl0-delta/2)&(pulse.wl < pulse.wl0+delta/2)
+    z = np.polyfit(pulse.w[fitarea], phase[fitarea], order)
+    return z
     
 def mask(x, y, where, **kwargs):
     y = scipy.interpolate.interp1d(x[~where], y[~where], **kwargs)(x)
@@ -289,8 +296,15 @@ class Retriever(QObject):
                       },
                      {'title': 'Plot oversampling', 'name': 'prop_oversampling', 'type': 'int', 'value': 4, 'readonly': False,
                       },
+                     {'title': 'Resolution for FWHM calc (fs)', 'name': 'dt_fwhm', 'type': 'float', 'value': 0.5,
+                      'readonly': False,
+                      },
+                     {'title': '$\Delta\lambda$ for fit (nm)', 'name': 'fit_deltalambda', 'type': 'float', 'value': 100,
+                      'readonly': False,
+                      }
                  ]
-                  },
+                  }]
+    pulse_prop = [
                 {'title': 'Pulse properties', 'name': 'pulse_prop', 'type': 'group', 'children': [
                     {'title': 'FWHM (fs)', 'name': 'fwhm_meas', 'type': 'float', 'values': 0,
                      'readonly': True,
@@ -307,8 +321,7 @@ class Retriever(QObject):
                     {'title': 'FOD (fs4)', 'name': 'fod', 'type': 'float', 'values': 0,
                      'readonly': True,
                      'tip': 'FOD'},
-                    ]}
-    ]
+                    ]}]
     def __init__(self, dockarea=None, dashboard=None):
         """
 
@@ -330,7 +343,8 @@ class Retriever(QObject):
         self.settings = Parameter.create(name='dataIN_settings', type='group', children=self.params_in)
         self.settings.sigTreeStateChanged.connect(self.settings_changed)
         self.prop_settings = Parameter.create(name='propagation_settings', type='group', children=self.prop_param)
-        # self.prop_settings.sigTreeStateChanged.connect(self.prop_settings_changed)
+        self.pulse_settings = Parameter.create(name='pulse_settings', type='group', children=self.pulse_prop)
+        self.prop_settings.sigTreeStateChanged.connect(self.prop_settings_changed)
 
         self.setupUI()
         self.create_menu(self.mainwindow.menuBar())
@@ -485,6 +499,19 @@ class Retriever(QObject):
                         self.settings.child('retrieving', 'pulse_guess').hide()
                     elif param.value() == 'Random gaussian':
                         self.settings.child('retrieving', 'pulse_guess').show()
+
+    def prop_settings_changed(self, param, changes):
+        for param, change, data in changes:
+            path = self.settings.childPath(param)
+            if change == 'childAdded':
+                pass
+            elif change == 'parent':
+                pass
+            elif change == 'value':
+                if param.name() in ['material1', 'material2', 'thickness1', 'thickness2', 'prop_oversampling']:
+                    self.propagate()
+                elif param.name() == 'dt_fwhm':
+                    self.update_fwhm()
 
     def quit_fun(self):
         """
@@ -666,20 +693,24 @@ class Retriever(QObject):
         self.ui.dock_retrieved_data.addWidget(data_widget)
 
         ##################################################
+
         # setup propagation dock
         prop_widget = QtWidgets.QWidget()
         prop_widget.setLayout(QtWidgets.QVBoxLayout())
 
-        # options_widget = QtWidgets.QWidget()
+        param_widget = QtWidgets.QWidget()
+        param_widget.setLayout(QtWidgets.QHBoxLayout())
+        param_widget.setMinimumHeight(300)
+
         self.prop_tree = ParameterTree()
-        self.prop_tree.setMinimumWidth(300)
-        prop_widget.layout().addWidget(self.prop_tree)
-        # prop_widget.layout().setStretch(0.5)
-        # self.ui.dock_propagation.addWidget(options_widget)
+        self.pulse_tree = ParameterTree()
+
+        param_widget.layout().addWidget(self.prop_tree,1)
+        param_widget.layout().addWidget(self.pulse_tree, 1)
+        prop_widget.layout().addWidget(param_widget,1)
 
         propagated_widget = QtWidgets.QWidget()
-        # prop_widget.layout().addWidget(options_widget)
-        prop_widget.layout().addWidget(propagated_widget)
+        prop_widget.layout().addWidget(propagated_widget,5)
         self.ui.dock_propagation.addWidget(prop_widget)
 
         self.prop_canvas = MplCanvas(propagated_widget, width=5, height=4, dpi=100)
@@ -690,6 +721,7 @@ class Retriever(QObject):
         propagated_widget.layout().addWidget(toolbar_prop)
         propagated_widget.layout().addWidget(self.prop_canvas)
         self.prop_tree.setParameters(self.prop_settings, showTop=False)
+        self.pulse_tree.setParameters(self.pulse_settings, showTop=False)
 
         self.ui.dock_data_in.raiseDock()
 
@@ -792,7 +824,7 @@ class Retriever(QObject):
         preprocess2(self.data_in['trace_in'], self.pnps)
 
         self.trace_canvas.figure.clf()
-        MeshDataPlot(trace_in, self.trace_canvas.figure)
+        MeshDataPlot(trace_in, self.trace_canvas.figure, limit=True)
         self.trace_canvas.draw()
 
     def process_both(self):
@@ -818,17 +850,32 @@ class Retriever(QObject):
                 k = Air.k(self.propagated_pulse.w+self.propagated_pulse.w0, unit='om')
             elif material == "Fused Silica":
                 k = FS_extended.k(self.propagated_pulse.w + self.propagated_pulse.w0, unit='om')
-            self.propagated_pulse.spectrum *= np.exp(1j * k * length)
+            self.propagated_pulse.spectrum *= np.exp(1j * k * 1e-3 *length)
 
-        substract_linear_phase(self.propagated_pulse)
+        z = fit_pulse_phase(self.propagated_pulse, self.prop_settings.child('materials', 'fit_deltalambda').value()*1e-9, 2)
+        self.propagated_pulse.spectrum *=  np.exp(- 1j * np.poly1d(z)(self.propagated_pulse.w))
+
+        z = fit_pulse_phase(self.propagated_pulse, self.prop_settings.child('materials', 'fit_deltalambda').value()*1e-9, 5)
+        self.pulse_settings.child('pulse_prop', 'gdd').setValue(z[-3]*1e30)
+        self.pulse_settings.child('pulse_prop', 'tod').setValue(z[-4]*1e45)
+        self.pulse_settings.child('pulse_prop', 'fod').setValue(z[-5]*1e60)
+
         plot_oversampling = self.prop_settings.child('materials', 'prop_oversampling').value()
-        t = np.linspace(self.propagated_pulse.t[0], self.propagated_pulse.t[-1], self.propagated_pulse.N * plot_oversampling)
-        intensity = np.abs(self.propagated_pulse.field_at(t))**2
 
         self.prop_canvas.figure.clf()
-        # PulseSimpleTimePlot(t, intensity, self.prop_canvas.figure)
-        PulsePlot(self.propagated_pulse, self.prop_canvas.figure)
+        PulsePropagationPlot(self.propagated_pulse, z, fig=self.prop_canvas.figure, oversampling = plot_oversampling)
         self.prop_canvas.draw()
+
+        self.update_fwhm()
+
+    def update_fwhm(self):
+        precision = 1e-15 * self.prop_settings.child('materials', 'dt_fwhm').value()
+        try:
+            fwhm = 1e15 * self.propagated_pulse.fwhm(precision)
+            self.pulse_settings.child('pulse_prop', 'fwhm_meas').setValue(fwhm)
+        except ValueError:
+            warnings.warm("FWHM is undefined.")
+            self.pulse_settings.child('pulse_prop', 'fwhm_meas').setValue(0)
 
     def process_spectrum(self):
 

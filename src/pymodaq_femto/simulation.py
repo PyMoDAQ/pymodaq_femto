@@ -12,7 +12,7 @@ from pymodaq.daq_utils.daq_utils import gauss1D, my_moment, l2w, linspace_step, 
 from pymodaq.daq_utils.array_manipulation import linspace_this_image, crop_vector_to_axis, crop_array_to_axis,\
     linspace_this_vect
 from pypret.material import BK7
-from pymodaq_femto.materials import FS_extended
+from pymodaq_femto.materials import FS
 from pymodaq_femto.graphics import MplCanvas, NavigationToolbar, MeshDataPlot, PulsePlot
 from collections import OrderedDict
 from pymodaq_femto import _PNPS_CLASSES
@@ -24,7 +24,7 @@ methods_tmp.sort()
 methods = ['frog']
 methods.extend(methods_tmp)
 nlprocesses = list(_PNPS_CLASSES[methods[0]].keys())
-materials = OrderedDict(FS=FS_extended, BK7=BK7)
+materials = OrderedDict(FS=FS, BK7=BK7)
 
 
 

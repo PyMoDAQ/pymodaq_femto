@@ -16,33 +16,8 @@ class MplCanvas(FigureCanvasQTAgg):
         fig = Figure(figsize=(width, height), dpi=dpi)
         super().__init__(fig)
 
-class PulseSimpleTimePlot:
-    def __init__(self, t, I, fig=None, plot=True, **kwargs):
-        self.t = t
-        self.I = I
-        self.fig = fig
-        if plot:
-            self.plot(**kwargs)
-
-    def plot(self, xaxis='time', yaxis='intensity', limit=True,
-             oversampling=False, show=True):
-
-
-        if self.fig is None:
-            fig, axs = plt.subplots(1, 1)
-        else:
-            ax1 = self.fig.subplots(1,1)
-
-        ax1.plot(self.t,self.I)
-        fx = EngFormatter(unit="s")
-        ax1.xaxis.set_major_formatter(fx)
-        ax1.set_title("time domain")
-        ax1.set_xlabel(xaxis)
-        ax1.set_ylabel(yaxis)
-
 
 class PulsePlot:
-
     def __init__(self, pulse, fig=None, plot=True, **kwargs):
         self.pulse = pulse
         self.fig = fig
@@ -99,6 +74,17 @@ class PulsePlot:
             unit = " rad Hz"
             label = "frequency"
 
+        #save the spectral phase shift to use in propagation plots
+        if yaxis == "intensity":
+            amp = lib.abs2(spectrum)
+        elif yaxis == "amplitude":
+            amp = np.abs(spectrum)
+        else:
+            raise ValueError("yaxis mode '%s' is unknown!" % yaxis)
+        # phase = lib.phase(spectrum)
+        # # center phase by weighted mean
+        # self.spectralphaseshift = lib.mean(phase, amp * amp)
+
         li21, li22, samp, spha = plot_complex(w, spectrum, ax2, ax22, yaxis=yaxis,
                                               phase_blanking=phase_blanking, limit=limit,
                                               phase_blanking_threshold=phase_blanking_threshold)
@@ -121,24 +107,48 @@ class PulsePlot:
         #     plt.show()
 
 class PulsePropagationPlot(PulsePlot):
-    def __init__(self, pulse, polynomial, fig=None, plot=True, **kwargs):
+    def __init__(self, pulse, polynomial, fwhm=None, fig=None, plot=True, **kwargs):
         self.polynomial = polynomial
         self.pulse = pulse
         self.fig = fig
+        self.fwhm = fwhm
         if plot:
             self.plot(**kwargs)
 
     def plot(self, xaxis='wavelength', yaxis='intensity', limit=True,
              oversampling=False, phase_blanking=False,
              phase_blanking_threshold=1e-3, show=True):
-        super().plot(xaxis='wavelength', yaxis='intensity', limit=True,
-             oversampling=False, phase_blanking=False,
-             phase_blanking_threshold=1e-3, show=True)
+
+        super().plot(xaxis=xaxis, yaxis=yaxis, limit=limit,
+             oversampling=oversampling, phase_blanking=phase_blanking,
+             phase_blanking_threshold=phase_blanking_threshold, show=show)
+
+        # #Add fwhm plot
+        if oversampling:
+            t = np.linspace(self.pulse.t[0], self.pulse.t[-1], self.pulse.N * oversampling)
+        else:
+            t = self.fundamental.t
+        intensity_fwhm = lib.gaussian(t, t[np.argmax(self.tamp)], sigma=0.5 * (self.fwhm * 1e-15) / np.sqrt(2 * np.log(2.0))) * self.tamp.max()
+        self.ax1.plot(t, intensity_fwhm, 'r--', alpha = 0.5)
+
+        self.ax1.set_zorder(1)  # default zorder is 0 for ax1 and ax2
+        self.ax1.patch.set_visible(False)  # prevents ax1 from hiding ax2
+
+        #Add polynomial fit of phase
         if xaxis == "wavelength":
             w = convert(self.pulse.w + self.pulse.w0, "om", "wl")
         elif xaxis == "frequency":
             w = self.pulse.w
-        self.ax22.plot(w, np.poly1d(self.polynomial)(self.pulse.w), '--')
+
+        phase_fit = np.poly1d(self.polynomial)(self.pulse.w)
+        if yaxis == "intensity":
+            amp = lib.abs2(self.pulse.spectrum)
+        elif yaxis == "amplitude":
+            amp = np.abs(self.pulse.spectrum)
+
+        phase_fit -= lib.mean(phase_fit, amp * amp)
+        self.ax22.plot(w, phase_fit, '--')
+
         if show:
             self.fig.tight_layout()
 
@@ -246,7 +256,7 @@ class RetrievalResultPlot:
         scale = np.abs(spectrum2).max()
         spectrum2 /= scale
         if fundamental is not None:
-            fundamental /= scale*scale
+            fundamental /= np.abs(fundamental).max()
 
         if xaxis == "wavelength":
             w = convert(w + pulse.w0, "om", "wl")

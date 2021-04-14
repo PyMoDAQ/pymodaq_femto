@@ -26,20 +26,27 @@ from pymodaq_femto.simulation import Simulator, methods, nlprocesses, materials
 from collections import OrderedDict
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
 from pypret.frequencies import om2wl, wl2om, convert
-from pypret.material import SellmeierF1
 import scipy
+import importlib
 from scipy.fftpack import next_fast_len
 from pymodaq.daq_utils.h5modules import H5BrowserUtil, H5Saver
 from pyqtgraph.graphicsItems.GradientEditorItem import Gradients
 from pymodaq_femto import _PNPS_CLASSES
 from pypret.retrieval.retriever import _RETRIEVER_CLASSES
 import warnings
+import math
+import inspect
+import pymodaq_femto.materials
 
 retriever_algos = list(_RETRIEVER_CLASSES.keys())
 
 config = utils.load_config()
 logger = utils.set_logger(utils.get_module_name(__file__))
 
+materials_propagation = []
+for item in inspect.getmembers(pymodaq_femto.materials):
+    if isinstance(item[1], pymodaq_femto.materials.BaseMaterial):
+        materials_propagation.append(item[1])
 
 class DataIn(OrderedDict):
     def __init__(self, name='', source='', trace_in=None, pulse_in=None, raw_spectrum=None, raw_trace=None, **kwargs):
@@ -127,10 +134,15 @@ def substract_linear_phase(pulse):
     pulse.spectrum *= np.exp(- 1j * np.poly1d(z)(pulse.w))
     return pulse
 
-def fit_pulse_phase(pulse, delta, order):
+def fit_pulse_phase(pulse, phase_blanking_threshold, order):
     phase = np.unwrap(np.angle(pulse.spectrum))
-    fitarea = (pulse.wl > pulse.wl0-delta/2)&(pulse.wl < pulse.wl0+delta/2)
-    z = np.polyfit(pulse.w[fitarea], phase[fitarea], order)
+    amp = np.abs(pulse.spectrum)
+
+    # delta = 100e-9
+    x, phase = lib.mask_phase(pulse.w, amp, phase, phase_blanking_threshold)
+    # fitarea = (pulse.wl > pulse.wl0-delta/2)&(pulse.wl < pulse.wl0+delta/2)
+    # z = np.polyfit(pulse.w[fitarea], phase[fitarea], order)
+    z = np.polyfit(x.compressed(),phase.compressed(),order)
     return z
     
 def mask(x, y, where, **kwargs):
@@ -138,6 +150,10 @@ def mask(x, y, where, **kwargs):
     return y
 params_simul = Simulator.params
 params_algo = utils.find_dict_in_list_from_key_val(params_simul, 'name', 'algo')
+
+def truncate(number, digits) -> float:
+    stepper = 10.0 ** digits
+    return math.trunc(stepper * number) / stepper
 
 #method of pypret.Retriever which overwrites the _error_vector method for a modified one which uses
 # an energy dependent weighting to account for unknown spectral response
@@ -171,24 +187,13 @@ def nonuniform_error_vector(self, Tmn, store=True):
             rs.Smk = self.pnps.Smk
         return np.ravel((Tmn_meas - mu * Tmn) * self._weights)
 
-#Fused Silica dispersion with extended spectral range
-FS_extended = SellmeierF1(coefficients=[0.0000000, 0.6961663,
-                               0.0684043, 0.4079426,
-                               0.1162414, 0.8974794,
-                               9.8961610],
-                 freq_range=[1e-8, 1e-5],
-                 name="FS",
-                 long_name="Fused silica (fused quartz) extended range")
 
-#Air dispersion
-Air = SellmeierF1(coefficients=[0.0000000, 14926.44e-8,
-                               19.36e-6, 41807.57e-8,
-                               7.434e-3, 0.0000000,
-                               0.0000000],
-                  freq_range=[1e-7, 1e-4],
-                  name="Air",
-                  long_name="Air at 0 degrees C")
-
+def popup_message(title,text):
+    msg = QtWidgets.QMessageBox()
+    msg.setWindowTitle(title)
+    msg.setText(text)
+    msg.setIcon(QtWidgets.QMessageBox.Warning)
+    msg.exec_()
 
 class Retriever(QObject):
     """
@@ -234,7 +239,7 @@ class Retriever(QObject):
                 {'title': 'Npoints:', 'name': 'npoints', 'type': 'list', 'values': [2 ** n for n in range(8, 16)],
                  'value': 1024,
                  'tip': 'Number of points for the temporal and Fourier Transform Grid'},
-                {'title': 'Time resolution (fs):', 'name': 'time_resolution', 'type': 'float', 'value': 0.5,
+                {'title': 'Time resolution (fs):', 'name': 'time_resolution', 'type': 'float', 'value': 1.0,
                  'tip': 'Time spacing between 2 points in the time grid'},
             ]},
             {'title': 'Trace limits:', 'name': 'ROIselect', 'type': 'group', 'visible': True, 'children': [
@@ -261,7 +266,7 @@ class Retriever(QObject):
         {'title': 'Retrieving', 'name': 'retrieving', 'type': 'group', 'children': [
             {'title': 'Algo type:', 'name': 'algo_type', 'type': 'list', 'values': retriever_algos,
              'tip': 'Retriever Algorithm'},
-            {'title': 'Initial guess:', 'name': 'guess_type', 'type': 'list', 'values': ['Fundamental spectrum', 'Random gaussian'],
+            {'title': 'Initial guess:', 'name': 'guess_type', 'type': 'list', 'values': ['Random gaussian', 'Fundamental spectrum'],
              'tip': 'Retriever Algorithm'},
             {'title': 'Verbose Info:', 'name': 'verbose', 'type': 'bool', 'value': True,
              'tip': 'Display infos during retrieval'},
@@ -269,8 +274,9 @@ class Retriever(QObject):
              'tip': 'Assume uniform response of non-linear process. Turn off for real data.'},
             {'title': 'Max iteration:', 'name': 'max_iter', 'type': 'int', 'value': 30,
              'tip': 'Max iteration for the algorithm'},
-            {'title': 'Initial Pulse Guess', 'name': 'pulse_guess', 'type': 'group', 'visible':False, 'children': [
-                {'title': 'FWHM (fs):', 'name': 'fwhm', 'type': 'float', 'value': 100,
+            {'title': 'Initial Pulse Guess', 'name': 'pulse_guess', 'type': 'group', 'visible':True
+                , 'children': [
+                {'title': 'FWHM (fs):', 'name': 'fwhm', 'type': 'float', 'value': 5.0,
                  'tip': 'Guess of the pulse duration (used as a starting point)'},
                 {'title': 'Phase amp. (rad):', 'name': 'phase_amp', 'type': 'float', 'value': 0.1,
                  'tip': 'Amplitude of the random phase applied to the initial guess'},
@@ -284,13 +290,23 @@ class Retriever(QObject):
              'tip': 'Propagate the retrieved pulse'}
            ]},
     ]
+    material_names =  [material.name for material in materials_propagation]
+    index = material_names.index("Air")
+    material_names.insert(0, material_names.pop(index))
+    air_first_material_names = material_names.copy()
+
+    index = material_names.index("FS")
+    material_names.insert(0, material_names.pop(index))
+
     prop_param = [
                  {'title': 'Materials', 'name': 'materials', 'type': 'group', 'children': [
-                     {'title': 'Material 1:', 'name': 'material1', 'type': 'list', 'values': ["Air","Fused Silica"], 'readonly': False,
-                      'tip': 'First material'},
+                     {'title': 'Material 1:', 'name': 'material1', 'type': 'list',
+                         'values': air_first_material_names,
+                      'readonly': False, 'tip': 'First material'},
                      {'title': 'Thickness (mm)', 'name': 'thickness1', 'type': 'float', 'value': 0, 'readonly': False,
                       },
-                     {'title': 'Material 2:', 'name': 'material2', 'type': 'list', 'values': ["Fused Silica", "Air"],
+                     {'title': 'Material 2:', 'name': 'material2', 'type': 'list',
+                      'values': material_names,
                       'readonly': False, 'tip': 'Second material'},
                      {'title': 'Thickness (mm)', 'name': 'thickness2', 'type': 'float', 'value': 0, 'readonly': False,
                       },
@@ -299,7 +315,7 @@ class Retriever(QObject):
                      {'title': 'Resolution for FWHM calc (fs)', 'name': 'dt_fwhm', 'type': 'float', 'value': 0.5,
                       'readonly': False,
                       },
-                     {'title': '$\Delta\lambda$ for fit (nm)', 'name': 'fit_deltalambda', 'type': 'float', 'value': 100,
+                     {'title': 'Phase masking threshold', 'name': 'fit_threshold', 'type': 'float', 'value': 0.1,
                       'readonly': False,
                       }
                  ]
@@ -309,9 +325,12 @@ class Retriever(QObject):
                     {'title': 'FWHM (fs)', 'name': 'fwhm_meas', 'type': 'float', 'values': 0,
                      'readonly': True,
                      'tip': 'Full width at half maximum of propagated pulse'},
-                    {'title': 'Fourier Limit (fs)', 'name': 'fwhm_ftl', 'type': 'float', 'values': 0,
-                     'readonly': True,
-                     'tip': 'Full width at half maximum of fourier transformed pulse'},
+                    #{'title': 'Fourier Limit (fs)', 'name': 'fwhm_ftl', 'type': 'float', 'values': 0,
+                     #'readonly': True,
+                     #'tip': 'Full width at half maximum of fourier transformed pulse'},
+                    #{'title': 'Peak intensity compared to FTL (%)', 'name': 'ratio_main_pulse', 'type': 'float', 'values': 0.0,
+                     #'readonly': True,
+                     #'tip': 'Peak intensity compared to the Fourier transform limited pulse'},
                     {'title': 'GDD (fs^2)', 'name': 'gdd', 'type': 'float', 'values': 0,
                      'readonly': True,
                      'tip': 'GDD'},
@@ -369,6 +388,8 @@ class Retriever(QObject):
         self.settings.child('algo', 'dscan_parameter').hide()
         self.settings.child('algo', 'alpha').hide()
         self.settings.child('algo', 'gamma').hide()
+
+        self.state = []
 
     def save_data(self, save_file_pathname=None):
         try:
@@ -508,7 +529,7 @@ class Retriever(QObject):
             elif change == 'parent':
                 pass
             elif change == 'value':
-                if param.name() in ['material1', 'material2', 'thickness1', 'thickness2', 'prop_oversampling']:
+                if param.name() in ['material1', 'material2', 'thickness1', 'thickness2', 'prop_oversampling','fit_threshold']:
                     self.propagate()
                 elif param.name() == 'dt_fwhm':
                     self.update_fwhm()
@@ -760,6 +781,7 @@ class Retriever(QObject):
                                     'spectrum_size').setValue(len(raw_spectrum['data']))
 
         self.settings.child('processing', 'grid_settings', 'wl0').setValue(wl0 * 1e9)
+        self.state.append("spectrum_loaded")
 
     def update_trace_info(self, raw_trace):
         wl0, fwhm = utils.my_moment(raw_trace['x_axis']['data'], np.sum(raw_trace['data'], 0))
@@ -780,6 +802,7 @@ class Retriever(QObject):
             self.settings.child('processing', 'grid_settings',
                                         'time_resolution').setValue(np.mean(
                 np.diff(raw_trace['y_axis']['data'])) * 1e15)
+        self.state.append("trace_loaded")
 
     def generate_ft_grid(self):
         wl0 = self.settings.child('processing', 'grid_settings', 'wl0').value() * 1e-9
@@ -789,10 +812,18 @@ class Retriever(QObject):
 
 
     def process_trace(self):
+        if "trace_loaded" not in self.state:
+            popup_message("Error", "Please load a trace first!")
+            return
+        if "spectrum_processed" not in self.state:
+            popup_message("Error", "Please process the spectrum first")
+            return
         self.ui.dock_processed.raiseDock()
+
         if self.pnps is None:
             logger.info('PNPS is not yet defined, process the spectrum first')
             return
+
         trace_in = self.get_trace_in()
         # TODO
         # ## substract bright spots range (if any)
@@ -822,6 +853,7 @@ class Retriever(QObject):
 
         self.data_in['trace_in'] = trace_in
         preprocess2(self.data_in['trace_in'], self.pnps)
+        self.state.append("trace_processed")
 
         self.trace_canvas.figure.clf()
         MeshDataPlot(trace_in, self.trace_canvas.figure, limit=True)
@@ -832,6 +864,9 @@ class Retriever(QObject):
         self.process_trace()
 
     def propagate(self):
+        if "result_ok" not in self.state:
+            popup_message("Error", "Complete the retrieval first")
+            return
         self.ui.dock_propagation.raiseDock()
 
         self.propagated_pulse = Pulse(self.result.pnps.ft, self.result.pnps.w0, unit="om")
@@ -846,39 +881,58 @@ class Retriever(QObject):
         thickness_list.append(self.prop_settings.child('materials', 'thickness2').value())
 
         for material, length in zip(material_list, thickness_list):
-            if material == "Air":
-                k = Air.k(self.propagated_pulse.w+self.propagated_pulse.w0, unit='om')
-            elif material == "Fused Silica":
-                k = FS_extended.k(self.propagated_pulse.w + self.propagated_pulse.w0, unit='om')
-            self.propagated_pulse.spectrum *= np.exp(1j * k * 1e-3 *length)
+            item = getattr(pymodaq_femto.materials, material)
+            w1, w2 = sorted(wl2om(np.array(item._range)))
+            w = self.propagated_pulse.w+ self.propagated_pulse.w0
+            valid = (w >= w1) & (w <= w2)
 
-        z = fit_pulse_phase(self.propagated_pulse, self.prop_settings.child('materials', 'fit_deltalambda').value()*1e-9, 2)
-        self.propagated_pulse.spectrum *=  np.exp(- 1j * np.poly1d(z)(self.propagated_pulse.w))
+            w = w[valid]
+            k = item.k(w, unit='om')
+            k0 = item.k(self.propagated_pulse.w0, unit='om')
+            k1 = item.k(self.propagated_pulse.w0 + self.propagated_pulse.ft.dw, unit="om")
+            dk = (k1 - k0) / self.propagated_pulse.ft.dw
 
-        z = fit_pulse_phase(self.propagated_pulse, self.prop_settings.child('materials', 'fit_deltalambda').value()*1e-9, 5)
-        self.pulse_settings.child('pulse_prop', 'gdd').setValue(z[-3]*1e30)
-        self.pulse_settings.child('pulse_prop', 'tod').setValue(z[-4]*1e45)
-        self.pulse_settings.child('pulse_prop', 'fod').setValue(z[-5]*1e60)
+            #Add material dispersion without 0th and 1st Taylor orders (they don't change the pulse)
+            kfull = np.zeros_like(self.propagated_pulse.w)
+            kfull[valid] = (k - k0 - dk * self.propagated_pulse.w[valid])
+            self.propagated_pulse.spectrum *= np.exp(1j * kfull * 1e-3 * length)
 
+        phasepoly = fit_pulse_phase(self.propagated_pulse, self.prop_settings.child('materials', 'fit_threshold').value(), 4)
+        self.propagated_pulse.spectrum *=  np.exp(- 1j * np.poly1d(phasepoly[-1])(self.propagated_pulse.w))
+        self.propagated_pulse.spectrum *= np.exp(- 1j * np.poly1d(phasepoly[-2])(self.propagated_pulse.w))
+        self.pulse_settings.child('pulse_prop', 'gdd').setValue(truncate(phasepoly[-3]*1e30*2,4))
+        self.pulse_settings.child('pulse_prop', 'tod').setValue(truncate(phasepoly[-4]*1e45*6,4))
+        self.pulse_settings.child('pulse_prop', 'fod').setValue(truncate(phasepoly[-5]*1e60*24,4))
+
+
+        self.update_fwhm()
         plot_oversampling = self.prop_settings.child('materials', 'prop_oversampling').value()
 
         self.prop_canvas.figure.clf()
-        PulsePropagationPlot(self.propagated_pulse, z, fig=self.prop_canvas.figure, oversampling = plot_oversampling)
+        PulsePropagationPlot(self.propagated_pulse, phasepoly, fwhm = self.pulse_settings.child('pulse_prop', 'fwhm_meas').value(),
+                            fig=self.prop_canvas.figure, oversampling = plot_oversampling,
+                             phase_blanking=True, phase_blanking_threshold=self.prop_settings.child('materials', 'fit_threshold').value())
         self.prop_canvas.draw()
-
-        self.update_fwhm()
 
     def update_fwhm(self):
         precision = 1e-15 * self.prop_settings.child('materials', 'dt_fwhm').value()
         try:
             fwhm = 1e15 * self.propagated_pulse.fwhm(precision)
-            self.pulse_settings.child('pulse_prop', 'fwhm_meas').setValue(fwhm)
+            self.pulse_settings.child('pulse_prop', 'fwhm_meas').setValue(truncate(fwhm,4))
+
+            # self.pulse_settings.child('pulse_prop', 'fwhm_ftl').setValue(truncate(1e15 * self.data_in['pulse_in'].fwhm(precision),4))
+
+            # ratio_ideal = lib.abs2(self.propagated_pulse.field).max() / lib.abs2(ftl.field).max()
+            # self.pulse_settings.child('pulse_prop', 'ratio_main_pulse').setValue(truncate(ratio_ideal*100,4))
+
         except ValueError:
-            warnings.warm("FWHM is undefined.")
+            warnings.warn("FWHM is undefined.")
             self.pulse_settings.child('pulse_prop', 'fwhm_meas').setValue(0)
 
     def process_spectrum(self):
-
+        if "spectrum_loaded" not in self.state:
+            popup_message("Error", "Please load a spectrum first!")
+            return
         self.ui.dock_processed.raiseDock()
 
         self.generate_ft_grid()
@@ -921,12 +975,15 @@ class Retriever(QObject):
         else:
             self.pnps = PNPS(self.data_in['pulse_in'], method, nlprocess)
 
-
+        self.state.append("spectrum_processed")
         self.pulse_canvas.figure.clf()
         PulsePlot(self.data_in['pulse_in'], self.pulse_canvas.figure)
         self.pulse_canvas.draw()
 
     def start_retriever(self):
+        if "trace_processed" not in self.state:
+            popup_message("Error", "Please process the trace first!")
+            return
         self.ui.dock_retriever.raiseDock()
         self.info_widget.clear()
         # mandatory to deal with multithreads
@@ -948,9 +1005,13 @@ class Retriever(QObject):
         self.retriever_thread.start()
 
         self.retriever_signal.emit('start')
+        self.state.append("retrieving")
 
     def stop_retriever(self):
-        self.retriever_signal.emit('stop')
+         if "retrieving" not in self.state:
+            popup_message("Error", "No retrieval running")
+            return
+         self.retriever_signal.emit('stop')
 
 
     def update_retriever_info(self, info):
@@ -980,6 +1041,7 @@ class Retriever(QObject):
     @pyqtSlot(SimpleNamespace)
     def display_results(self, result):
         self.result = result
+        self.state.append("result_ok")
         self.ui.dock_retrieved_data.raiseDock()
 
         self.data_in['pulse_in'].spectrum = result.pulse_retrieved
@@ -1206,11 +1268,15 @@ class RetrieverWorker(QObject):
             self.retriever._error_vector = nonuniform_error_vector.__get__(self.retriever)
 
         if self.settings.child('retrieving', 'guess_type').value() == 'Fundamental spectrum':
-            guess = (1 + 0 * 1j) * np.abs(self.data_in['pulse_in'].spectrum)
-            guess /= (self.data_in['pulse_in'].wl * self.data_in['pulse_in'].wl)
-            guess /= np.max(guess)
+            pulse_guess = self.data_in['pulse_in'].copy()
+            pulse_guess.spectrum = (1 + 0 * 1j) * np.abs(self.data_in['pulse_in'].spectrum)
+            pulse_guess.spectrum /= (self.data_in['pulse_in'].wl * self.data_in['pulse_in'].wl)
+            pulse_guess.field /= np.abs(pulse_guess.field).max()
+
+            guess = pulse_guess.spectrum
+
         elif self.settings.child('retrieving', 'guess_type').value() == 'Random gaussian':
-            random_gaussian(self.data_in['pulse_in'], fwhm*1e-15, phase_max=amplitude)
+            random_gaussian(self.data_in['pulse_in'] , fwhm*1e-15, phase_max=amplitude)
             guess = self.data_in['pulse_in'].spectrum
 
         self.retriever.retrieve(self.data_in['trace_in'], guess, weights=None)

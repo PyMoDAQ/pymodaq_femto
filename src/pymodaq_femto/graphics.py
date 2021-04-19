@@ -74,17 +74,6 @@ class PulsePlot:
             unit = " rad Hz"
             label = "frequency"
 
-        #save the spectral phase shift to use in propagation plots
-        if yaxis == "intensity":
-            amp = lib.abs2(spectrum)
-        elif yaxis == "amplitude":
-            amp = np.abs(spectrum)
-        else:
-            raise ValueError("yaxis mode '%s' is unknown!" % yaxis)
-        # phase = lib.phase(spectrum)
-        # # center phase by weighted mean
-        # self.spectralphaseshift = lib.mean(phase, amp * amp)
-
         li21, li22, samp, spha = plot_complex(w, spectrum, ax2, ax22, yaxis=yaxis,
                                               phase_blanking=phase_blanking, limit=limit,
                                               phase_blanking_threshold=phase_blanking_threshold)

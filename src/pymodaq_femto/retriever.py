@@ -920,11 +920,6 @@ class Retriever(QObject):
             fwhm = 1e15 * self.propagated_pulse.fwhm(precision)
             self.pulse_settings.child('pulse_prop', 'fwhm_meas').setValue(truncate(fwhm,4))
 
-            # self.pulse_settings.child('pulse_prop', 'fwhm_ftl').setValue(truncate(1e15 * self.data_in['pulse_in'].fwhm(precision),4))
-
-            # ratio_ideal = lib.abs2(self.propagated_pulse.field).max() / lib.abs2(ftl.field).max()
-            # self.pulse_settings.child('pulse_prop', 'ratio_main_pulse').setValue(truncate(ratio_ideal*100,4))
-
         except ValueError:
             warnings.warn("FWHM is undefined.")
             self.pulse_settings.child('pulse_prop', 'fwhm_meas').setValue(0)

@@ -290,7 +290,7 @@ class Retriever(QObject):
              'tip': 'Propagate the retrieved pulse'}
            ]},
     ]
-    material_names =  [material.name for material in materials_propagation]
+    material_names = [material.name for material in materials_propagation]
     index = material_names.index("Air")
     material_names.insert(0, material_names.pop(index))
     air_first_material_names = material_names.copy()
@@ -322,7 +322,7 @@ class Retriever(QObject):
                   }]
     pulse_prop = [
                 {'title': 'Pulse properties', 'name': 'pulse_prop', 'type': 'group', 'children': [
-                    {'title': 'FWHM (fs)', 'name': 'fwhm_meas', 'type': 'float', 'values': 0,
+                    {'title': 'FWHM (fs)', 'name': 'fwhm_meas', 'type': 'float', 'value': 0.,
                      'readonly': True,
                      'tip': 'Full width at half maximum of propagated pulse'},
                     #{'title': 'Fourier Limit (fs)', 'name': 'fwhm_ftl', 'type': 'float', 'values': 0,
@@ -331,16 +331,16 @@ class Retriever(QObject):
                     #{'title': 'Peak intensity compared to FTL (%)', 'name': 'ratio_main_pulse', 'type': 'float', 'values': 0.0,
                      #'readonly': True,
                      #'tip': 'Peak intensity compared to the Fourier transform limited pulse'},
-                    {'title': 'GDD (fs^2)', 'name': 'gdd', 'type': 'float', 'values': 0,
-                     'readonly': True,
+                    {'title': 'GDD (fs^2)', 'name': 'gdd', 'type': 'float', 'value': 0., 'readonly': True,
                      'tip': 'GDD'},
-                    {'title': 'TOD (fs3)', 'name': 'tod', 'type': 'float', 'values': 0,
+                    {'title': 'TOD (fs3)', 'name': 'tod', 'type': 'float', 'value': 0.,
                      'readonly': True,
                      'tip': 'TOD'},
-                    {'title': 'FOD (fs4)', 'name': 'fod', 'type': 'float', 'values': 0,
+                    {'title': 'FOD (fs4)', 'name': 'fod', 'type': 'float', 'value': 0.,
                      'readonly': True,
                      'tip': 'FOD'},
                     ]}]
+
     def __init__(self, dockarea=None, dashboard=None):
         """
 
@@ -373,6 +373,8 @@ class Retriever(QObject):
         self.retriever = None
         self.pnps = None
         self.retriever_thread = None
+        self.propagated_pulse = None
+        self.result = None
         self.save_file_pathname = None
         self.settings.child('processing', 'process_trace').sigActivated.connect(self.process_trace)
         self.settings.child('processing', 'process_spectrum').sigActivated.connect(self.process_spectrum)
@@ -400,18 +402,63 @@ class Retriever(QObject):
             h5saver.init_file(update_h5=True, custom_naming=False, addhoc_file_path=save_file_pathname,
                               raw_group_name='PyMoDAQFemtoAnalysis')
 
-            settings_str = b'<All_settings>' + ioxml.parameter_to_xml_string(self.settings)
-            settings_str += b'</All_settings>'
-            # TODO
-            h5saver.set_attr(h5saver.raw_group, 'settings', settings_str)
             data_in_group = h5saver.get_set_group(h5saver.raw_group, "DataIn")
             trace_group = h5saver.get_set_group(data_in_group, 'NLTrace')
             spectrum_group = h5saver.get_set_group(data_in_group, 'FunSpectrum')
             h5saver.add_data(trace_group, self.data_in['raw_trace'], scan_type='')
             h5saver.add_data(spectrum_group, self.data_in['raw_spectrum'], scan_type='')
 
+            settings_str = b'<DataIn_settings>' + ioxml.parameter_to_xml_string(self.settings)
+            settings_str += b'</DataIn_settings>'
+            h5saver.set_attr(data_in_group, 'settings', settings_str)
+            if self.result is not None:
+                rr = self.result
+                result_group = h5saver.get_set_group(h5saver.raw_group, "Result")
+
+                spectrum_group = h5saver.get_set_group(result_group, 'Spectrum')
+                h5saver.add_data(spectrum_group, dict(data=rr.pulse_retrieved,
+                                                      x_axis=dict(data=rr.pnps.ft.w,
+                                                                  label='frequency',
+                                                                  units='Hz')),
+                                 scan_type='')
+
+                h5saver.set_attr(spectrum_group, 'w0', rr.pnps.w0)
+                h5saver.set_attr(spectrum_group, 'Npts', rr.pnps.ft.N)
+
+                trace_group_retrieved = h5saver.get_set_group(result_group, 'NLTrace')
+                trace_retrieved = dict(data=rr.trace_retrieved,
+                                       x_axis=dict(data=rr.pnps.process_w,
+                                                   label='frequency',
+                                                   units='Hz'),
+                                       y_axis=dict(data=rr.parameter,
+                                                   label='parameter',
+                                                   units='Par. units')
+                                       )
+                h5saver.add_data(trace_group_retrieved, trace_retrieved, scan_type='')
+
+            if self.propagated_pulse is not None:
+                propag_group = h5saver.get_set_group(result_group, 'Propagation')
+                h5saver.add_data(propag_group,
+                                 dict(data=self.propagated_pulse.spectrum,
+                                      x_axis=dict(data=rr.pnps.ft.w, label='frequency', units='Hz')), scan_type='')
+                settings_str = b'<prop_settings title="Prop. Settings" type="group">'
+                settings_str += ioxml.parameter_to_xml_string(self.prop_settings)
+                settings_str += ioxml.parameter_to_xml_string(self.pulse_settings)
+                settings_str += b'</prop_settings>'
+
+                h5saver.set_attr(propag_group, 'settings', settings_str)
+
+            settings_str = b'<All_settings title="All Settings" type="group">'
+            settings_str += ioxml.parameter_to_xml_string(self.settings)
+            settings_str += ioxml.parameter_to_xml_string(self.pulse_settings)
+            settings_str += ioxml.parameter_to_xml_string(self.prop_settings)
+            settings_str += b'</All_settings>'
+
+            h5saver.set_attr(h5saver.raw_group, 'settings', settings_str)
+
         except Exception as e:
             pass
+
 
         h5saver.close_file()
 
@@ -434,6 +481,9 @@ class Retriever(QObject):
         self.data_in_menu.addSeparator()
         self.data_in_menu.addAction(self.gen_trace_in_action)
         self.data_in_menu.addAction(self.load_from_simulation_action)
+
+        self.io_menu = menubar.addMenu('IO')
+        self.io_menu.addAction(self.save_data_action)
 
     def settings_changed(self, param, changes):
         for param, change, data in changes:
@@ -621,7 +671,7 @@ class Retriever(QObject):
         self.load_spectrum_in_action.triggered.connect(self.load_spectrum_in)
         self.gen_trace_in_action.triggered.connect(self.open_simulator)
         self.load_from_simulation_action.triggered.connect(self.load_from_simulator)
-        self.save_data_action.triggered.connect(self.save_data)
+        self.save_data_action.triggered.connect(lambda: self.save_data(None))
 
         self.toolbar.addAction(self.load_trace_in_action)
         self.toolbar.addAction(self.load_spectrum_in_action)

@@ -18,7 +18,6 @@ class MplCanvas(FigureCanvasQTAgg):
 
 
 class PulsePlot:
-
     def __init__(self, pulse, fig=None, plot=True, **kwargs):
         self.pulse = pulse
         self.fig = fig
@@ -96,12 +95,59 @@ class PulsePlot:
             fig.tight_layout()
         #     plt.show()
 
+class PulsePropagationPlot(PulsePlot):
+    def __init__(self, pulse, polynomial, fwhm=None, fig=None, plot=True, **kwargs):
+        self.polynomial = polynomial
+        self.pulse = pulse
+        self.fig = fig
+        self.fwhm = fwhm
+        if plot:
+            self.plot(**kwargs)
+
+    def plot(self, xaxis='wavelength', yaxis='intensity', limit=True,
+             oversampling=False, phase_blanking=False,
+             phase_blanking_threshold=1e-3, show=True):
+
+        super().plot(xaxis=xaxis, yaxis=yaxis, limit=limit,
+             oversampling=oversampling, phase_blanking=phase_blanking,
+             phase_blanking_threshold=phase_blanking_threshold, show=show)
+
+        # #Add fwhm plot
+        if oversampling:
+            t = np.linspace(self.pulse.t[0], self.pulse.t[-1], self.pulse.N * oversampling)
+        else:
+            t = self.fundamental.t
+        intensity_fwhm = lib.gaussian(t, t[np.argmax(self.tamp)], sigma=0.5 * (self.fwhm * 1e-15) / np.sqrt(2 * np.log(2.0))) * self.tamp.max()
+        self.ax1.plot(t, intensity_fwhm, 'r--', alpha = 0.5)
+
+        self.ax1.set_zorder(1)  # default zorder is 0 for ax1 and ax2
+        self.ax1.patch.set_visible(False)  # prevents ax1 from hiding ax2
+
+        #Add polynomial fit of phase
+        if xaxis == "wavelength":
+            w = convert(self.pulse.w + self.pulse.w0, "om", "wl")
+        elif xaxis == "frequency":
+            w = self.pulse.w
+
+        phase_fit = np.poly1d(self.polynomial)(self.pulse.w)
+        if yaxis == "intensity":
+            amp = lib.abs2(self.pulse.spectrum)
+        elif yaxis == "amplitude":
+            amp = np.abs(self.pulse.spectrum)
+
+        phase_fit -= lib.mean(phase_fit, amp * amp)
+        self.ax22.plot(w, phase_fit, '--')
+
+        if show:
+            self.fig.tight_layout()
+
 
 class MeshDataPlot:
 
-    def __init__(self, mesh_data, fig=None, plot=True, **kwargs):
+    def __init__(self, mesh_data, fig=None, plot=True, limit=False, **kwargs):
         self.md = mesh_data
         self.fig = fig
+        self.limit = limit
         if plot:
             self.plot(**kwargs)
 
@@ -115,6 +161,8 @@ class MeshDataPlot:
 
         im = plot_meshdata(ax, md, "nipy_spectral", **kwargs)
         fig.colorbar(im, ax=ax)
+        if self.limit:
+            ax.set_xlim(lib.limit(md.axes[1], md.marginals(axes=1)))
 
         self.fig, self.ax = fig, ax
         self.im = im
@@ -197,7 +245,7 @@ class RetrievalResultPlot:
         scale = np.abs(spectrum2).max()
         spectrum2 /= scale
         if fundamental is not None:
-            fundamental /= scale*scale
+            fundamental /= np.abs(fundamental).max()
 
         if xaxis == "wavelength":
             w = convert(w + pulse.w0, "om", "wl")

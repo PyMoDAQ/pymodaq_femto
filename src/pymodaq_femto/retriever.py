@@ -21,23 +21,32 @@ from pymodaq.daq_utils.plotting.viewer2D.viewer2D_main import Viewer2D
 from pymodaq.daq_utils.plotting.viewer1D.viewer1D_main import Viewer1D
 from pymodaq.daq_utils.plotting.viewer0D.viewer0D_main import Viewer0D
 from pymodaq.daq_utils.managers.roi_manager import LinearROI
-from pymodaq_femto.graphics import RetrievalResultPlot, MplCanvas, NavigationToolbar, MeshDataPlot, PulsePlot
+from pymodaq_femto.graphics import RetrievalResultPlot, MplCanvas, NavigationToolbar, MeshDataPlot, PulsePlot, PulsePropagationPlot
 from pymodaq_femto.simulation import Simulator, methods, nlprocesses, materials
 from collections import OrderedDict
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
 from pypret.frequencies import om2wl, wl2om, convert
 import scipy
+import importlib
 from scipy.fftpack import next_fast_len
 from pymodaq.daq_utils.h5modules import H5BrowserUtil, H5Saver
 from pyqtgraph.graphicsItems.GradientEditorItem import Gradients
 from pymodaq_femto import _PNPS_CLASSES
 from pypret.retrieval.retriever import _RETRIEVER_CLASSES
+import warnings
+import math
+import inspect
+import pymodaq_femto.materials
 
 retriever_algos = list(_RETRIEVER_CLASSES.keys())
 
 config = utils.load_config()
 logger = utils.set_logger(utils.get_module_name(__file__))
 
+materials_propagation = []
+for item in inspect.getmembers(pymodaq_femto.materials):
+    if isinstance(item[1], pymodaq_femto.materials.BaseMaterial):
+        materials_propagation.append(item[1])
 
 class DataIn(OrderedDict):
     def __init__(self, name='', source='', trace_in=None, pulse_in=None, raw_spectrum=None, raw_trace=None, **kwargs):
@@ -120,16 +129,71 @@ def preprocess2(trace, pnps):
 
 def substract_linear_phase(pulse):
     phase = np.unwrap(np.angle(pulse.spectrum))
+    intensity = np.abs(pulse.spectrum)
     z = np.polyfit(pulse.w, phase, 1)
     pulse.spectrum *= np.exp(- 1j * np.poly1d(z)(pulse.w))
     return pulse
-    
+
+def fit_pulse_phase(pulse, phase_blanking_threshold, order):
+    phase = np.unwrap(np.angle(pulse.spectrum))
+    amp = np.abs(pulse.spectrum)
+
+    # delta = 100e-9
+    x, phase = lib.mask_phase(pulse.w, amp, phase, phase_blanking_threshold)
+    # fitarea = (pulse.wl > pulse.wl0-delta/2)&(pulse.wl < pulse.wl0+delta/2)
+    # z = np.polyfit(pulse.w[fitarea], phase[fitarea], order)
+    z = np.polyfit(x.compressed(),phase.compressed(),order)
+    return z
     
 def mask(x, y, where, **kwargs):
     y = scipy.interpolate.interp1d(x[~where], y[~where], **kwargs)(x)
     return y
 params_simul = Simulator.params
 params_algo = utils.find_dict_in_list_from_key_val(params_simul, 'name', 'algo')
+
+def truncate(number, digits) -> float:
+    stepper = 10.0 ** digits
+    return math.trunc(stepper * number) / stepper
+
+#method of pypret.Retriever which overwrites the _error_vector method for a modified one which uses
+# an energy dependent weighting to account for unknown spectral response
+def nonuniform_error_vector(self, Tmn, store=True):
+        " Modified to allow for energy dependent weights"
+        # rename
+        rs = self._retrieval_state
+        Tmn_meas = self.Tmn_meas
+        # scaling factor
+        w2 = self._weights * self._weights
+
+        #mu is vector if spectral response is unknown
+        mean_mu = np.sum(Tmn_meas * Tmn * w2) / np.sum(Tmn * Tmn * w2)
+        mu = np.full(self.N, mean_mu)
+        mask = (w2.sum(axis=0) > 0.0) & (# weights equal to zero
+                                        Tmn_meas.sum(axis=0) > 0.0)  # measurement is zero
+        mu[mask] = (
+                np.sum(Tmn_meas * Tmn * w2, axis=0)[mask]
+                / np.sum(Tmn * Tmn * w2, axis=0)[mask]
+            )
+        # extend the edges of the response function
+        idx1 = lib.find(mask, lambda x: x)
+        mu[:idx1] = mu[idx1]
+        idx2 = lib.find(mask, lambda x: x, n=-1)
+        mu[idx2:] = mu[idx2]
+
+        # store intermediate results in current retrieval state
+        if store:
+            rs.mu = mu
+            rs.Tmn = Tmn
+            rs.Smk = self.pnps.Smk
+        return np.ravel((Tmn_meas - mu * Tmn) * self._weights)
+
+
+def popup_message(title,text):
+    msg = QtWidgets.QMessageBox()
+    msg.setWindowTitle(title)
+    msg.setText(text)
+    msg.setIcon(QtWidgets.QMessageBox.Warning)
+    msg.exec_()
 
 class Retriever(QObject):
     """
@@ -150,9 +214,9 @@ class Retriever(QObject):
                  'tip': 'FWHM of the spectrum in nanometers'},
                 {'title': 'Param Size', 'name': 'trace_param_size', 'type': 'int', 'value': 0, 'readonly': True},
                 {'title': 'Wavelentgh Size', 'name': 'trace_wl_size', 'type': 'int', 'value': 0, 'readonly': True},
-                {'title': 'Scaling (m)', 'name': 'wl_scaling', 'type': 'float', 'value': 1e-9, 'readonly': False,
+                {'title': 'Scaling (m)', 'name': 'wl_scaling', 'type': 'float', 'value': 1, 'readonly': False,
                  'tip': 'Scaling to go from the Trace wavelength values to wavelength in meters'},
-                {'title': 'Scaling Parameter', 'name': 'param_scaling', 'type': 'float', 'value': 1e-15,
+                {'title': 'Scaling Parameter', 'name': 'param_scaling', 'type': 'float', 'value': 1,
                  'readonly': False,
                  'tip': 'Scaling to go from the trace parameter values to delay in seconds, insertion in m (dscan) '
                         'or phase in rad (miips)'},
@@ -175,7 +239,7 @@ class Retriever(QObject):
                 {'title': 'Npoints:', 'name': 'npoints', 'type': 'list', 'values': [2 ** n for n in range(8, 16)],
                  'value': 1024,
                  'tip': 'Number of points for the temporal and Fourier Transform Grid'},
-                {'title': 'Time resolution (fs):', 'name': 'time_resolution', 'type': 'float', 'value': 0.5,
+                {'title': 'Time resolution (fs):', 'name': 'time_resolution', 'type': 'float', 'value': 1.0,
                  'tip': 'Time spacing between 2 points in the time grid'},
             ]},
             {'title': 'Trace limits:', 'name': 'ROIselect', 'type': 'group', 'visible': True, 'children': [
@@ -202,12 +266,17 @@ class Retriever(QObject):
         {'title': 'Retrieving', 'name': 'retrieving', 'type': 'group', 'children': [
             {'title': 'Algo type:', 'name': 'algo_type', 'type': 'list', 'values': retriever_algos,
              'tip': 'Retriever Algorithm'},
+            {'title': 'Initial guess:', 'name': 'guess_type', 'type': 'list', 'values': ['Random gaussian', 'Fundamental spectrum'],
+             'tip': 'Retriever Algorithm'},
             {'title': 'Verbose Info:', 'name': 'verbose', 'type': 'bool', 'value': True,
              'tip': 'Display infos during retrieval'},
+            {'title': 'Uniform spectral response:', 'name': 'uniform_response', 'type': 'bool', 'value': True,
+             'tip': 'Assume uniform response of non-linear process. Turn off for real data.'},
             {'title': 'Max iteration:', 'name': 'max_iter', 'type': 'int', 'value': 30,
              'tip': 'Max iteration for the algorithm'},
-            {'title': 'Initial Pulse Guess', 'name': 'pulse_guess', 'type': 'group', 'children': [
-                {'title': 'FWHM (fs):', 'name': 'fwhm', 'type': 'float', 'value': 100,
+            {'title': 'Initial Pulse Guess', 'name': 'pulse_guess', 'type': 'group', 'visible':True
+                , 'children': [
+                {'title': 'FWHM (fs):', 'name': 'fwhm', 'type': 'float', 'value': 5.0,
                  'tip': 'Guess of the pulse duration (used as a starting point)'},
                 {'title': 'Phase amp. (rad):', 'name': 'phase_amp', 'type': 'float', 'value': 0.1,
                  'tip': 'Amplitude of the random phase applied to the initial guess'},
@@ -217,9 +286,61 @@ class Retriever(QObject):
              'tip': 'Start the retrieval process'},
             {'title': 'Stop Retrieval', 'name': 'stop', 'type': 'action',
              'tip': 'Stop the retrieval process'},
+            {'title': 'Propagate result', 'name': 'propagate', 'type': 'action',
+             'tip': 'Propagate the retrieved pulse'}
            ]},
     ]
+    material_names =  [material.name for material in materials_propagation]
+    index = material_names.index("Air")
+    material_names.insert(0, material_names.pop(index))
+    air_first_material_names = material_names.copy()
 
+    index = material_names.index("FS")
+    material_names.insert(0, material_names.pop(index))
+
+    prop_param = [
+                 {'title': 'Materials', 'name': 'materials', 'type': 'group', 'children': [
+                     {'title': 'Material 1:', 'name': 'material1', 'type': 'list',
+                         'values': air_first_material_names,
+                      'readonly': False, 'tip': 'First material'},
+                     {'title': 'Thickness (mm)', 'name': 'thickness1', 'type': 'float', 'value': 0, 'readonly': False,
+                      },
+                     {'title': 'Material 2:', 'name': 'material2', 'type': 'list',
+                      'values': material_names,
+                      'readonly': False, 'tip': 'Second material'},
+                     {'title': 'Thickness (mm)', 'name': 'thickness2', 'type': 'float', 'value': 0, 'readonly': False,
+                      },
+                     {'title': 'Plot oversampling', 'name': 'prop_oversampling', 'type': 'int', 'value': 4, 'readonly': False,
+                      },
+                     {'title': 'Resolution for FWHM calc (fs)', 'name': 'dt_fwhm', 'type': 'float', 'value': 0.5,
+                      'readonly': False,
+                      },
+                     {'title': 'Phase masking threshold', 'name': 'fit_threshold', 'type': 'float', 'value': 0.1,
+                      'readonly': False,
+                      }
+                 ]
+                  }]
+    pulse_prop = [
+                {'title': 'Pulse properties', 'name': 'pulse_prop', 'type': 'group', 'children': [
+                    {'title': 'FWHM (fs)', 'name': 'fwhm_meas', 'type': 'float', 'values': 0,
+                     'readonly': True,
+                     'tip': 'Full width at half maximum of propagated pulse'},
+                    #{'title': 'Fourier Limit (fs)', 'name': 'fwhm_ftl', 'type': 'float', 'values': 0,
+                     #'readonly': True,
+                     #'tip': 'Full width at half maximum of fourier transformed pulse'},
+                    #{'title': 'Peak intensity compared to FTL (%)', 'name': 'ratio_main_pulse', 'type': 'float', 'values': 0.0,
+                     #'readonly': True,
+                     #'tip': 'Peak intensity compared to the Fourier transform limited pulse'},
+                    {'title': 'GDD (fs^2)', 'name': 'gdd', 'type': 'float', 'values': 0,
+                     'readonly': True,
+                     'tip': 'GDD'},
+                    {'title': 'TOD (fs3)', 'name': 'tod', 'type': 'float', 'values': 0,
+                     'readonly': True,
+                     'tip': 'TOD'},
+                    {'title': 'FOD (fs4)', 'name': 'fod', 'type': 'float', 'values': 0,
+                     'readonly': True,
+                     'tip': 'FOD'},
+                    ]}]
     def __init__(self, dockarea=None, dashboard=None):
         """
 
@@ -240,6 +361,9 @@ class Retriever(QObject):
 
         self.settings = Parameter.create(name='dataIN_settings', type='group', children=self.params_in)
         self.settings.sigTreeStateChanged.connect(self.settings_changed)
+        self.prop_settings = Parameter.create(name='propagation_settings', type='group', children=self.prop_param)
+        self.pulse_settings = Parameter.create(name='pulse_settings', type='group', children=self.pulse_prop)
+        self.prop_settings.sigTreeStateChanged.connect(self.prop_settings_changed)
 
         self.setupUI()
         self.create_menu(self.mainwindow.menuBar())
@@ -255,6 +379,7 @@ class Retriever(QObject):
         self.settings.child('processing', 'process_both').sigActivated.connect(self.process_both)
         self.settings.child('retrieving', 'start').sigActivated.connect(self.start_retriever)
         self.settings.child('retrieving', 'stop').sigActivated.connect(self.stop_retriever)
+        self.settings.child('retrieving', 'propagate').sigActivated.connect(self.propagate)
 
         self.viewer_trace_in.ROI_select_signal.connect(self.update_ROI)
         self.viewer_trace_in.ROIselect_action.triggered.connect(self.show_ROI)
@@ -263,6 +388,8 @@ class Retriever(QObject):
         self.settings.child('algo', 'dscan_parameter').hide()
         self.settings.child('algo', 'alpha').hide()
         self.settings.child('algo', 'gamma').hide()
+
+        self.state = []
 
     def save_data(self, save_file_pathname=None):
         try:
@@ -388,6 +515,24 @@ class Retriever(QObject):
                         self.settings.child('algo', 'material').hide()
                         self.settings.child('algo', 'dscan_parameter').hide()
 
+                elif param.name() == 'guess_type':
+                    if param.value() == 'Fundamental spectrum':
+                        self.settings.child('retrieving', 'pulse_guess').hide()
+                    elif param.value() == 'Random gaussian':
+                        self.settings.child('retrieving', 'pulse_guess').show()
+
+    def prop_settings_changed(self, param, changes):
+        for param, change, data in changes:
+            path = self.settings.childPath(param)
+            if change == 'childAdded':
+                pass
+            elif change == 'parent':
+                pass
+            elif change == 'value':
+                if param.name() in ['material1', 'material2', 'thickness1', 'thickness2', 'prop_oversampling','fit_threshold']:
+                    self.propagate()
+                elif param.name() == 'dt_fwhm':
+                    self.update_fwhm()
 
     def quit_fun(self):
         """
@@ -434,6 +579,10 @@ class Retriever(QObject):
 
         self.ui.dock_retrieved_data = Dock('Retrieved Data')
         self.dockarea.addDock(self.ui.dock_retrieved_data, 'below', self.ui.dock_retriever)
+
+        self.ui.dock_propagation = Dock('Propagation')
+        self.dockarea.addDock(self.ui.dock_propagation, 'below', self.ui.dock_retriever)
+
 
         self.ui.dock_processed.raiseDock()
 
@@ -564,6 +713,37 @@ class Retriever(QObject):
         data_widget.layout().addWidget(self.data_canvas)
         self.ui.dock_retrieved_data.addWidget(data_widget)
 
+        ##################################################
+
+        # setup propagation dock
+        prop_widget = QtWidgets.QWidget()
+        prop_widget.setLayout(QtWidgets.QVBoxLayout())
+
+        param_widget = QtWidgets.QWidget()
+        param_widget.setLayout(QtWidgets.QHBoxLayout())
+        param_widget.setMinimumHeight(300)
+
+        self.prop_tree = ParameterTree()
+        self.pulse_tree = ParameterTree()
+
+        param_widget.layout().addWidget(self.prop_tree,1)
+        param_widget.layout().addWidget(self.pulse_tree, 1)
+        prop_widget.layout().addWidget(param_widget,1)
+
+        propagated_widget = QtWidgets.QWidget()
+        prop_widget.layout().addWidget(propagated_widget,5)
+        self.ui.dock_propagation.addWidget(prop_widget)
+
+        self.prop_canvas = MplCanvas(propagated_widget, width=5, height=4, dpi=100)
+        # Create toolbar, passing canvas as first parament, parent (self, the MainWindow) as second.
+        toolbar_prop = NavigationToolbar(self.prop_canvas, propagated_widget)
+
+        propagated_widget.setLayout(QtWidgets.QVBoxLayout())
+        propagated_widget.layout().addWidget(toolbar_prop)
+        propagated_widget.layout().addWidget(self.prop_canvas)
+        self.prop_tree.setParameters(self.prop_settings, showTop=False)
+        self.pulse_tree.setParameters(self.pulse_settings, showTop=False)
+
         self.ui.dock_data_in.raiseDock()
 
     def open_simulator(self):
@@ -601,6 +781,7 @@ class Retriever(QObject):
                                     'spectrum_size').setValue(len(raw_spectrum['data']))
 
         self.settings.child('processing', 'grid_settings', 'wl0').setValue(wl0 * 1e9)
+        self.state.append("spectrum_loaded")
 
     def update_trace_info(self, raw_trace):
         wl0, fwhm = utils.my_moment(raw_trace['x_axis']['data'], np.sum(raw_trace['data'], 0))
@@ -608,19 +789,20 @@ class Retriever(QObject):
         self.settings.child('data_in_info', 'trace_in_info', 'wl_fwhm').setValue(fwhm * 1e9)
 
         self.settings.child('data_in_info', 'trace_in_info', 'trace_param_size').setValue(
-            len(raw_trace['y_axis']))
+            len(raw_trace['y_axis']['data']))
         self.settings.child('data_in_info', 'trace_in_info',
                                     'trace_wl_size').setValue(len(raw_trace['x_axis']['data']))
 
 
         self.settings.child('processing', 'grid_settings',
-                                    'npoints').setValue(len(raw_trace['y_axis']['data']))
+                                    'npoints').setValue(next_fast_len(len(raw_trace['x_axis']['data'])))
 
         method = self.settings.child('algo', 'method').value()
         if not (method == 'dscan' or method == 'miips'):
             self.settings.child('processing', 'grid_settings',
                                         'time_resolution').setValue(np.mean(
                 np.diff(raw_trace['y_axis']['data'])) * 1e15)
+        self.state.append("trace_loaded")
 
     def generate_ft_grid(self):
         wl0 = self.settings.child('processing', 'grid_settings', 'wl0').value() * 1e-9
@@ -630,10 +812,18 @@ class Retriever(QObject):
 
 
     def process_trace(self):
+        if "trace_loaded" not in self.state:
+            popup_message("Error", "Please load a trace first!")
+            return
+        if "spectrum_processed" not in self.state:
+            popup_message("Error", "Please process the spectrum first")
+            return
         self.ui.dock_processed.raiseDock()
+
         if self.pnps is None:
             logger.info('PNPS is not yet defined, process the spectrum first')
             return
+
         trace_in = self.get_trace_in()
         # TODO
         # ## substract bright spots range (if any)
@@ -663,18 +853,81 @@ class Retriever(QObject):
 
         self.data_in['trace_in'] = trace_in
         preprocess2(self.data_in['trace_in'], self.pnps)
+        self.state.append("trace_processed")
 
         self.trace_canvas.figure.clf()
-        MeshDataPlot(trace_in, self.trace_canvas.figure)
+        MeshDataPlot(trace_in, self.trace_canvas.figure, limit=True)
         self.trace_canvas.draw()
 
     def process_both(self):
         self.process_spectrum()
         self.process_trace()
 
+    def propagate(self):
+        if "result_ok" not in self.state:
+            popup_message("Error", "Complete the retrieval first")
+            return
+        self.ui.dock_propagation.raiseDock()
+
+        self.propagated_pulse = Pulse(self.result.pnps.ft, self.result.pnps.w0, unit="om")
+        self.propagated_pulse.spectrum = self.result.pulse_retrieved
+
+        material_list = []
+        material_list.append(self.prop_settings.child('materials', 'material1').value())
+        material_list.append(self.prop_settings.child('materials', 'material2').value())
+
+        thickness_list = []
+        thickness_list.append(self.prop_settings.child('materials', 'thickness1').value())
+        thickness_list.append(self.prop_settings.child('materials', 'thickness2').value())
+
+        for material, length in zip(material_list, thickness_list):
+            item = getattr(pymodaq_femto.materials, material)
+            w1, w2 = sorted(wl2om(np.array(item._range)))
+            w = self.propagated_pulse.w+ self.propagated_pulse.w0
+            valid = (w >= w1) & (w <= w2)
+
+            w = w[valid]
+            k = item.k(w, unit='om')
+            k0 = item.k(self.propagated_pulse.w0, unit='om')
+            k1 = item.k(self.propagated_pulse.w0 + self.propagated_pulse.ft.dw, unit="om")
+            dk = (k1 - k0) / self.propagated_pulse.ft.dw
+
+            #Add material dispersion without 0th and 1st Taylor orders (they don't change the pulse)
+            kfull = np.zeros_like(self.propagated_pulse.w)
+            kfull[valid] = (k - k0 - dk * self.propagated_pulse.w[valid])
+            self.propagated_pulse.spectrum *= np.exp(1j * kfull * 1e-3 * length)
+
+        phasepoly = fit_pulse_phase(self.propagated_pulse, self.prop_settings.child('materials', 'fit_threshold').value(), 4)
+        self.propagated_pulse.spectrum *=  np.exp(- 1j * np.poly1d(phasepoly[-1])(self.propagated_pulse.w))
+        self.propagated_pulse.spectrum *= np.exp(- 1j * np.poly1d(phasepoly[-2])(self.propagated_pulse.w))
+        self.pulse_settings.child('pulse_prop', 'gdd').setValue(truncate(phasepoly[-3]*1e30*2,4))
+        self.pulse_settings.child('pulse_prop', 'tod').setValue(truncate(phasepoly[-4]*1e45*6,4))
+        self.pulse_settings.child('pulse_prop', 'fod').setValue(truncate(phasepoly[-5]*1e60*24,4))
+
+
+        self.update_fwhm()
+        plot_oversampling = self.prop_settings.child('materials', 'prop_oversampling').value()
+
+        self.prop_canvas.figure.clf()
+        PulsePropagationPlot(self.propagated_pulse, phasepoly, fwhm = self.pulse_settings.child('pulse_prop', 'fwhm_meas').value(),
+                            fig=self.prop_canvas.figure, oversampling = plot_oversampling,
+                             phase_blanking=True, phase_blanking_threshold=self.prop_settings.child('materials', 'fit_threshold').value())
+        self.prop_canvas.draw()
+
+    def update_fwhm(self):
+        precision = 1e-15 * self.prop_settings.child('materials', 'dt_fwhm').value()
+        try:
+            fwhm = 1e15 * self.propagated_pulse.fwhm(precision)
+            self.pulse_settings.child('pulse_prop', 'fwhm_meas').setValue(truncate(fwhm,4))
+
+        except ValueError:
+            warnings.warn("FWHM is undefined.")
+            self.pulse_settings.child('pulse_prop', 'fwhm_meas').setValue(0)
 
     def process_spectrum(self):
-
+        if "spectrum_loaded" not in self.state:
+            popup_message("Error", "Please load a spectrum first!")
+            return
         self.ui.dock_processed.raiseDock()
 
         self.generate_ft_grid()
@@ -717,12 +970,15 @@ class Retriever(QObject):
         else:
             self.pnps = PNPS(self.data_in['pulse_in'], method, nlprocess)
 
-
+        self.state.append("spectrum_processed")
         self.pulse_canvas.figure.clf()
         PulsePlot(self.data_in['pulse_in'], self.pulse_canvas.figure)
         self.pulse_canvas.draw()
 
     def start_retriever(self):
+        if "trace_processed" not in self.state:
+            popup_message("Error", "Please process the trace first!")
+            return
         self.ui.dock_retriever.raiseDock()
         self.info_widget.clear()
         # mandatory to deal with multithreads
@@ -744,9 +1000,14 @@ class Retriever(QObject):
         self.retriever_thread.start()
 
         self.retriever_signal.emit('start')
+        self.state.append("retrieving")
 
     def stop_retriever(self):
-        self.retriever_signal.emit('stop')
+         if "retrieving" not in self.state:
+            popup_message("Error", "No retrieval running")
+            return
+         self.retriever_signal.emit('stop')
+
 
     def update_retriever_info(self, info):
         self.info_widget.moveCursor(QTextCursor.End)
@@ -775,6 +1036,7 @@ class Retriever(QObject):
     @pyqtSlot(SimpleNamespace)
     def display_results(self, result):
         self.result = result
+        self.state.append("result_ok")
         self.ui.dock_retrieved_data.raiseDock()
 
         self.data_in['pulse_in'].spectrum = result.pulse_retrieved
@@ -888,7 +1150,7 @@ class Retriever(QObject):
                 self.h5browse.close_file()
             else:
                 data, fname, node_path = browse_data(ret_all=True, message='Select the node corresponding to the'
-                                                                           'Charaterization Trace')
+                                                                           'Characterization Trace')
 
             if fname != '':
                 self.save_file_pathname = fname
@@ -961,7 +1223,6 @@ class Retriever(QObject):
         self.display_trace_in()
         self.display_spectrum_in()
 
-
 class RetrieverWorker(QObject):
     result_signal = pyqtSignal(SimpleNamespace)
     status_sig = pyqtSignal(str)
@@ -972,7 +1233,7 @@ class RetrieverWorker(QObject):
         self.settings = settings
         self.data_in = data_in
         self.pnps = pnps
-        self.retirever = None
+        self.retriever = None
 
     # def send_callback(self, pnps):
     #     self.callback_sig.emit([pnps.Tmn, [pnps.parameter, pnps.process_w], pnps.pulse.field, pnps.field.t])
@@ -991,16 +1252,29 @@ class RetrieverWorker(QObject):
         fwhm = self.settings.child('retrieving', 'pulse_guess', 'fwhm').value()
         amplitude = self.settings.child('retrieving', 'pulse_guess', 'phase_amp').value()
 
-
+        uniform_response = self.settings.child('retrieving', 'uniform_response').value()
         preprocess2(self.data_in['trace_in'], self.pnps)
 
 
         self.retriever = retriever_cls(self.pnps, logging=True, verbose=verbose, maxiter=max_iter,
                                        status_sig=self.status_sig, callback=self.callback_sig.emit,
                                        step_command=QtWidgets.QApplication.processEvents)
-        random_gaussian(self.data_in['pulse_in'], fwhm*1e-15, phase_max=amplitude)
-        # now retrieve from the synthetic trace simulated above
-        self.retriever.retrieve(self.data_in['trace_in'], self.data_in['pulse_in'].spectrum, weights=None)
+        if not uniform_response:
+            self.retriever._error_vector = nonuniform_error_vector.__get__(self.retriever)
+
+        if self.settings.child('retrieving', 'guess_type').value() == 'Fundamental spectrum':
+            pulse_guess = self.data_in['pulse_in'].copy()
+            pulse_guess.spectrum = (1 + 0 * 1j) * np.abs(self.data_in['pulse_in'].spectrum)
+            pulse_guess.spectrum /= (self.data_in['pulse_in'].wl * self.data_in['pulse_in'].wl)
+            pulse_guess.field /= np.abs(pulse_guess.field).max()
+
+            guess = pulse_guess.spectrum
+
+        elif self.settings.child('retrieving', 'guess_type').value() == 'Random gaussian':
+            random_gaussian(self.data_in['pulse_in'] , fwhm*1e-15, phase_max=amplitude)
+            guess = self.data_in['pulse_in'].spectrum
+
+        self.retriever.retrieve(self.data_in['trace_in'], guess, weights=None)
 
         self.result_signal.emit(self.retriever.result())
 
@@ -1019,14 +1293,14 @@ def main():
 
     prog = Retriever(dashboard=None, dockarea=area)
     win.show()
-    try:
-        prog.load_trace_in(fname='C:\\Data\\2021\\20210315\\Dataset_20210315_001\\Dataset_20210315_001.h5',
-                            node_path='/Raw_datas/Scan001/Detector000/Data1D/Ch000/Data')
-        prog.load_spectrum_in(fname='C:\\Users\\weber\\Desktop\\pulse.h5',
-                            node_path='/Raw_datas/Detector000/Data1D/Ch000/Data')
-        prog.save_data('C:\\Users\\weber\\Desktop\\pulse_analysis.h5')
-    except:
-        pass
+    # try:
+    #     prog.load_trace_in(fname='C:\\Data\\2021\\20210315\\Dataset_20210315_001\\Dataset_20210315_001.h5',
+    #                         node_path='/Raw_datas/Scan001/Detector000/Data1D/Ch000/Data')
+    #     prog.load_spectrum_in(fname='C:\\Users\\weber\\Desktop\\pulse.h5',
+    #                         node_path='/Raw_datas/Detector000/Data1D/Ch000/Data')
+    #     prog.save_data('C:\\Users\\weber\\Desktop\\pulse_analysis.h5')
+    # except:
+    #     pass
     sys.exit(app.exec_())
 
 

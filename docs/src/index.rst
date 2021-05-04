@@ -62,6 +62,10 @@ Changelog
 
 Please see :doc:`the changelog </changelog>`.
 
+
+Index
+*****
+
 .. toctree::
    :maxdepth: 6
    :caption: Contents:
@@ -69,4 +73,12 @@ Please see :doc:`the changelog </changelog>`.
    usage/Installation
    usage/Feedback
    usage/Contributors
+
+
+.. toctree::
+   :hidden:
+   :caption: Related packages
+
+   PyMoDAQ <http://pymodaq.cnrs.fr>
+   pypret <https://pypret.readthedocs.io/en/latest/>
 

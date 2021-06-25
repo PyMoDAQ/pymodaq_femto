@@ -1,12 +1,16 @@
 import matplotlib
-matplotlib.use('Qt5Agg')
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT as NavigationToolbar
+
+matplotlib.use("Qt5Agg")
+from matplotlib.backends.backend_qt5agg import (
+    FigureCanvasQTAgg,
+    NavigationToolbar2QT as NavigationToolbar,
+)
 from matplotlib.figure import Figure
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.ticker import EngFormatter
-from pypret import (Pulse, lib)
+from pypret import Pulse, lib
 from pypret.frequencies import convert
 from pypret.graphics import plot_complex, plot_meshdata
 
@@ -24,9 +28,16 @@ class PulsePlot:
         if plot:
             self.plot(**kwargs)
 
-    def plot(self, xaxis='wavelength', yaxis='intensity', limit=True,
-             oversampling=False, phase_blanking=False,
-             phase_blanking_threshold=1e-3, show=True):
+    def plot(
+        self,
+        xaxis="wavelength",
+        yaxis="intensity",
+        limit=True,
+        oversampling=False,
+        phase_blanking=False,
+        phase_blanking_threshold=1e-3,
+        show=True,
+    ):
         pulse = self.pulse
 
         if self.fig is None:
@@ -47,9 +58,16 @@ class PulsePlot:
             field = pulse.field
 
         # time domain
-        li11, li12, tamp, tpha = plot_complex(t, field, ax1, ax12, yaxis=yaxis,
-                                              phase_blanking=phase_blanking, limit=limit,
-                                              phase_blanking_threshold=phase_blanking_threshold)
+        li11, li12, tamp, tpha = plot_complex(
+            t,
+            field,
+            ax1,
+            ax12,
+            yaxis=yaxis,
+            phase_blanking=phase_blanking,
+            limit=limit,
+            phase_blanking_threshold=phase_blanking_threshold,
+        )
         fx = EngFormatter(unit="s")
         ax1.xaxis.set_major_formatter(fx)
         ax1.set_title("time domain")
@@ -74,9 +92,16 @@ class PulsePlot:
             unit = " rad Hz"
             label = "frequency"
 
-        li21, li22, samp, spha = plot_complex(w, spectrum, ax2, ax22, yaxis=yaxis,
-                                              phase_blanking=phase_blanking, limit=limit,
-                                              phase_blanking_threshold=phase_blanking_threshold)
+        li21, li22, samp, spha = plot_complex(
+            w,
+            spectrum,
+            ax2,
+            ax22,
+            yaxis=yaxis,
+            phase_blanking=phase_blanking,
+            limit=limit,
+            phase_blanking_threshold=phase_blanking_threshold,
+        )
         fx = EngFormatter(unit=unit)
         ax2.xaxis.set_major_formatter(fx)
         ax2.set_title("frequency domain")
@@ -95,6 +120,7 @@ class PulsePlot:
             fig.tight_layout()
         #     plt.show()
 
+
 class PulsePropagationPlot(PulsePlot):
     def __init__(self, pulse, polynomial, fwhm=None, fig=None, plot=True, **kwargs):
         self.polynomial = polynomial
@@ -104,26 +130,48 @@ class PulsePropagationPlot(PulsePlot):
         if plot:
             self.plot(**kwargs)
 
-    def plot(self, xaxis='wavelength', yaxis='intensity', limit=True,
-             oversampling=False, phase_blanking=False,
-             phase_blanking_threshold=1e-3, show=True):
+    def plot(
+        self,
+        xaxis="wavelength",
+        yaxis="intensity",
+        limit=True,
+        oversampling=False,
+        phase_blanking=False,
+        phase_blanking_threshold=1e-3,
+        show=True,
+    ):
 
-        super().plot(xaxis=xaxis, yaxis=yaxis, limit=limit,
-             oversampling=oversampling, phase_blanking=phase_blanking,
-             phase_blanking_threshold=phase_blanking_threshold, show=show)
+        super().plot(
+            xaxis=xaxis,
+            yaxis=yaxis,
+            limit=limit,
+            oversampling=oversampling,
+            phase_blanking=phase_blanking,
+            phase_blanking_threshold=phase_blanking_threshold,
+            show=show,
+        )
 
         # #Add fwhm plot
         if oversampling:
-            t = np.linspace(self.pulse.t[0], self.pulse.t[-1], self.pulse.N * oversampling)
+            t = np.linspace(
+                self.pulse.t[0], self.pulse.t[-1], self.pulse.N * oversampling
+            )
         else:
             t = self.fundamental.t
-        intensity_fwhm = lib.gaussian(t, t[np.argmax(self.tamp)], sigma=0.5 * (self.fwhm * 1e-15) / np.sqrt(2 * np.log(2.0))) * self.tamp.max()
-        self.ax1.plot(t, intensity_fwhm, 'r--', alpha = 0.5)
+        intensity_fwhm = (
+            lib.gaussian(
+                t,
+                t[np.argmax(self.tamp)],
+                sigma=0.5 * (self.fwhm * 1e-15) / np.sqrt(2 * np.log(2.0)),
+            )
+            * self.tamp.max()
+        )
+        self.ax1.plot(t, intensity_fwhm, "r--", alpha=0.5)
 
         self.ax1.set_zorder(1)  # default zorder is 0 for ax1 and ax2
         self.ax1.patch.set_visible(False)  # prevents ax1 from hiding ax2
 
-        #Add polynomial fit of phase
+        # Add polynomial fit of phase
         if xaxis == "wavelength":
             w = convert(self.pulse.w + self.pulse.w0, "om", "wl")
         elif xaxis == "frequency":
@@ -136,14 +184,13 @@ class PulsePropagationPlot(PulsePlot):
             amp = np.abs(self.pulse.spectrum)
 
         phase_fit -= lib.mean(phase_fit, amp * amp)
-        self.ax22.plot(w, phase_fit, '--')
+        self.ax22.plot(w, phase_fit, "--")
 
         if show:
             self.fig.tight_layout()
 
 
 class MeshDataPlot:
-
     def __init__(self, mesh_data, fig=None, plot=True, limit=False, **kwargs):
         self.md = mesh_data
         self.fig = fig
@@ -175,22 +222,29 @@ class MeshDataPlot:
 
 
 class RetrievalResultPlot:
-
     def __init__(self, retrieval_result, fig=None, plot=True, **kwargs):
         self.retrieval_result = retrieval_result
         self.fig = fig
         if plot:
             self.plot(**kwargs)
 
-    def plot(self, xaxis='wavelength', yaxis='intensity', limit=True,
-             oversampling=False, phase_blanking=False,
-             phase_blanking_threshold=1e-3, show=True, fundamental=None,
-             fundamental_wavelength=None):
+    def plot(
+        self,
+        xaxis="wavelength",
+        yaxis="intensity",
+        limit=True,
+        oversampling=False,
+        phase_blanking=False,
+        phase_blanking_threshold=1e-3,
+        show=True,
+        fundamental=None,
+        fundamental_wavelength=None,
+    ):
         rr = self.retrieval_result
         # reconstruct a pulse from that
         pulse = Pulse(rr.pnps.ft, rr.pnps.w0, unit="om")
         if self.fig is None:
-            fig = plt.figure(figsize=(30.0/2.54, 20.0/2.54))
+            fig = plt.figure(figsize=(30.0 / 2.54, 20.0 / 2.54))
         else:
             fig = self.fig
         # construct the figure
@@ -215,9 +269,16 @@ class RetrievalResultPlot:
             field2 = pulse.field
         field2 /= np.abs(field2).max()
 
-        li11, li12, tamp2, tpha2 = plot_complex(t, field2, ax1, ax12, yaxis=yaxis,
-                          phase_blanking=phase_blanking, limit=limit,
-                          phase_blanking_threshold=phase_blanking_threshold)
+        li11, li12, tamp2, tpha2 = plot_complex(
+            t,
+            field2,
+            ax1,
+            ax12,
+            yaxis=yaxis,
+            phase_blanking=phase_blanking,
+            limit=limit,
+            phase_blanking_threshold=phase_blanking_threshold,
+        )
         li11.set_linewidth(3.0)
         li11.set_color("#1f77b4")
         li11.set_alpha(0.6)
@@ -233,11 +294,10 @@ class RetrievalResultPlot:
         ax12.set_ylabel("phase (rad)")
         ax1.legend([li11, li12], [yaxis, "phase"])
 
-        # frequency domain        
+        # frequency domain
         if oversampling:
-            w = np.linspace(pulse.w[0], pulse.w[-1], pulse.N * oversampling)            
+            w = np.linspace(pulse.w[0], pulse.w[-1], pulse.N * oversampling)
             spectrum2 = pulse.spectrum_at(w)
-            pulse.spectrum = rr.pulse_retrieved
         else:
             w = pulse.w
             spectrum2 = rr.pulse_retrieved
@@ -254,16 +314,23 @@ class RetrievalResultPlot:
             label = "wavelength"
         elif xaxis == "frequency":
             unit = " rad Hz"
-            label = "frequency"        
+            label = "frequency"
 
         # Plot in spectral domain
-        li21, li22, samp2, spha2 = plot_complex(w, spectrum2, ax2, ax22, yaxis=yaxis,
-                          phase_blanking=phase_blanking, limit=limit,
-                          phase_blanking_threshold=phase_blanking_threshold)
+        li21, li22, samp2, spha2 = plot_complex(
+            w,
+            spectrum2,
+            ax2,
+            ax22,
+            yaxis=yaxis,
+            phase_blanking=phase_blanking,
+            limit=limit,
+            phase_blanking_threshold=phase_blanking_threshold,
+        )
         lines = [li21, li22]
         labels = ["intensity", "phase"]
         if fundamental is not None:
-            li31, = ax2.plot(fund_w, fundamental, "r+", ms=4.0, mew=1.0, zorder=0)
+            (li31,) = ax2.plot(fund_w, fundamental, "r+", ms=4.0, mew=1.0, zorder=0)
             lines.append(li31)
             labels.append("measurement")
         li21.set_linewidth(3.0)
@@ -283,8 +350,11 @@ class RetrievalResultPlot:
 
         axes = [ax3, ax4, ax5]
         sc = 1.0 / rr.trace_input.max()
-        traces = [rr.trace_input * sc, rr.trace_retrieved * sc,
-                  (rr.trace_input - rr.trace_retrieved) * rr.weights * sc]
+        traces = [
+            rr.trace_input * sc,
+            rr.trace_retrieved * sc,
+            (rr.trace_input - rr.trace_retrieved) * rr.weights * sc,
+        ]
         titles = ["measured", "retrieved", "difference"]
         if np.any(rr.weights != 1.0):
             titles[-1] = "weighted difference"
@@ -301,7 +371,9 @@ class RetrievalResultPlot:
             fy = EngFormatter(unit=md.units[0])
             ax.yaxis.set_major_formatter(fy)
             ax.set_title(title)
-            ax.set_xlim(lib.limit(md.axes[1], md.marginals(axes=1)))
+            ax.set_xlim(
+                lib.limit(md.axes[1], md.marginals(axes=1), threshold=1e-2, padding=0.1)
+            )
 
         ax1.grid()
         ax2.grid()
@@ -312,9 +384,11 @@ class RetrievalResultPlot:
         self.ax3, self.ax4, self.ax5 = ax3, ax4, ax5
 
         if show:
-            #gs.tight_layout(fig)
-            gs1.update(left=0.05, right=0.95, top=0.9, bottom=0.1,
-                      hspace=0.25, wspace=0.3)
-            gs2.update(left=0.1, right=0.95, top=0.9, bottom=0.1,
-                      hspace=0.5, wspace=1.0)
+            # gs.tight_layout(fig)
+            gs1.update(
+                left=0.05, right=0.95, top=0.9, bottom=0.1, hspace=0.25, wspace=0.3
+            )
+            gs2.update(
+                left=0.1, right=0.95, top=0.9, bottom=0.1, hspace=0.5, wspace=1.0
+            )
             plt.show()

@@ -27,7 +27,6 @@ nlprocesses = list(_PNPS_CLASSES[methods[0]].keys())
 materials = OrderedDict(FS=FS, BK7=BK7)
 
 
-
 class Simulator(QObject):
     params = [
             {'title': 'Show Pulse', 'name': 'show_pulse', 'type': 'action', 'visible': False},

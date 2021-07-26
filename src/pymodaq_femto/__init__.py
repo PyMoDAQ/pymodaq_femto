@@ -1,6 +1,7 @@
 from pathlib import Path
 from pyqtgraph.graphicsItems.GradientEditorItem import Gradients
 from collections import OrderedDict
+from . import materials
 
 # #### including dscan
 from pypret.pnps import _PNPS_CLASSES

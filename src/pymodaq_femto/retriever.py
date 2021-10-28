@@ -7,10 +7,10 @@ import numpy as np
 from types import SimpleNamespace
 import io
 from contextlib import redirect_stdout
-from PyQt5 import QtGui, QtWidgets, QtCore
-from PyQt5.QtCore import Qt, QObject, pyqtSlot, QThread, pyqtSignal, QLocale
-from PyQt5.QtGui import QIcon, QPixmap
-from PyQt5.QtGui import QTextCursor
+from qtpy import QtGui, QtWidgets, QtCore
+from qtpy.QtCore import Qt, QObject, Slot, QThread, Signal, QLocale
+from qtpy.QtGui import QIcon, QPixmap
+from qtpy.QtGui import QTextCursor
 from pyqtgraph.dockarea import Dock
 from pyqtgraph.parametertree import Parameter, ParameterTree
 from pymodaq.daq_utils import daq_utils as utils
@@ -299,8 +299,8 @@ class Retriever(QObject):
     Main class initializing a DAQ_Scan module with its dashboard and scanning control panel
     """
 
-    status_signal = pyqtSignal(str)
-    retriever_signal = pyqtSignal(str)
+    status_signal = Signal(str)
+    retriever_signal = Signal(str)
     params_in = [
         params_algo,
         {
@@ -1782,7 +1782,7 @@ class Retriever(QObject):
         self.info_widget.insertPlainText(info + "\n")
         self.info_widget.moveCursor(QTextCursor.End)
 
-    @pyqtSlot(list)
+    @Slot(list)
     def update_retriever(self, args):
         max = 0.8 * np.max([np.abs(np.max(args[0])), np.abs(np.min(args[0]))])
         self.viewer_live_trace.ui.histogram_red.setHistogramRange(-max, max)
@@ -1810,7 +1810,7 @@ class Retriever(QObject):
             labels=["Spectral Intensity"],
         )
 
-    @pyqtSlot(SimpleNamespace)
+    @Slot(SimpleNamespace)
     def display_results(self, result):
         self.result = result
         self.state.append("result_ok")
@@ -1843,7 +1843,7 @@ class Retriever(QObject):
         )
         self.data_canvas.draw()
 
-    @pyqtSlot(QtCore.QRectF)
+    @Slot(QtCore.QRectF)
     def update_ROI(self, rect=QtCore.QRectF(0, 0, 1, 1)):
         self.settings.child("processing", "ROIselect", "x0").setValue(int(rect.x()))
         self.settings.child("processing", "ROIselect", "y0").setValue(int(rect.y()))
@@ -2054,9 +2054,9 @@ class Retriever(QObject):
 
 
 class RetrieverWorker(QObject):
-    result_signal = pyqtSignal(SimpleNamespace)
-    status_sig = pyqtSignal(str)
-    callback_sig = pyqtSignal(list)
+    result_signal = Signal(SimpleNamespace)
+    status_sig = Signal(str)
+    callback_sig = Signal(list)
 
     def __init__(self, data_in, pnps, settings):
         super().__init__()
@@ -2068,7 +2068,7 @@ class RetrieverWorker(QObject):
     # def send_callback(self, pnps):
     #     self.callback_sig.emit([pnps.Tmn, [pnps.parameter, pnps.process_w], pnps.pulse.field, pnps.field.t])
 
-    @pyqtSlot(str)
+    @Slot(str)
     def command_retriever(self, command):
         if command == "start":
             self.start_retriever()

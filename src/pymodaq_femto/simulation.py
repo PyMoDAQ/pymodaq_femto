@@ -1,5 +1,5 @@
-from PyQt5.QtCore import QObject
-from PyQt5 import QtWidgets
+from qtpy.QtCore import QObject
+from qtpy import QtWidgets
 
 from pathlib import Path
 from pyqtgraph.parametertree import Parameter, ParameterTree

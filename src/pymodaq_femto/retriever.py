@@ -237,7 +237,7 @@ def retrieve_step_fix_spectrum(self, iteration, En):
     rs.current_max_gradient = 0.0
     # switch iteration
     if rs.steps_since_improvement == 10:
-        rs.mode = "global"
+        rs.mode == "local" if rs.mode == "global" else "global"
     # local iteration
     if rs.mode == "local":
         # running estimate for the trace
@@ -353,14 +353,14 @@ class Retriever(QObject):
                             "readonly": True,
                         },
                         {
-                            "title": "Wavelentgh Size",
+                            "title": "Wavelength Size",
                             "name": "trace_wl_size",
                             "type": "int",
                             "value": 0,
                             "readonly": True,
                         },
                         {
-                            "title": "Scaling (m)",
+                            "title": "Wavelength scaling",
                             "name": "wl_scaling",
                             "type": "float",
                             "value": 1,
@@ -368,10 +368,10 @@ class Retriever(QObject):
                             "tip": "Scaling to go from the Trace wavelength values to wavelength in meters",
                         },
                         {
-                            "title": "Scaling Parameter",
+                            "title": "Parameter scaling",
                             "name": "param_scaling",
                             "type": "float",
-                            "value": 1,
+                            "value": 1e-6,
                             "readonly": False,
                             "tip": "Scaling to go from the trace parameter values to delay in seconds, insertion in m (dscan) "
                             "or phase in rad (miips)",
@@ -415,10 +415,10 @@ class Retriever(QObject):
                             "readonly": True,
                         },
                         {
-                            "title": "Scaling (m)",
+                            "title": "Wavelength scaling",
                             "name": "wl_scaling",
                             "type": "float",
-                            "value": 1e-9,
+                            "value": 1,
                             "readonly": False,
                             "tip": "Scaling to go from the spectrum wavelength values to wavelength in meters",
                         },
@@ -1120,6 +1120,16 @@ class Retriever(QObject):
                         self.settings.child("algo", "material").hide()
                         self.settings.child("algo", "dscan_parameter").hide()
 
+                # If trace scalings are changed, rescale trace axes
+                elif param.name() in ["param_scaling", "wl_scaling"] and param.parent().name() == "trace_in_info":
+                    if "trace_loaded" in self.state:
+                        self.load_trace_in(fname=self.data_in["file_path"], node_path=self.data_in["node_path"])
+
+                # If spectrum scalings are changed, reload spectrum axis
+                elif param.name() == "wl_scaling" and param.parent().name() == "spectrum_in_info":
+                    if "spectrum_loaded" in self.state:
+                        self.load_spectrum_in(fname=self.data_in["spectrum_file_path"], node_path=self.data_in["spectrum_node_path"])
+
                 elif param.name() == "guess_type":
                     if param.value() == "Fundamental spectrum":
                         self.settings.child("retrieving", "pulse_guess").hide()
@@ -1472,7 +1482,7 @@ class Retriever(QObject):
         self.state.append("trace_loaded")
 
     def generate_ft_grid(self):
-        wl0 = self.settings.child("processing", "grid_settings", "wl0").value() * 1e-9
+        wl_center = self.settings.child("processing", "grid_settings", "wl0").value() * 1e-9
         Npts = self.settings.child("processing", "grid_settings", "npoints").value()
         dt = (
             self.settings.child(
@@ -1480,7 +1490,9 @@ class Retriever(QObject):
             ).value()
             * 1e-15
         )
-        self.ft = FourierTransform(Npts, dt, w0=wl2om(-wl0 - 300e-9))
+        dw = np.pi / (0.5 * Npts * dt)
+
+        self.ft = FourierTransform(Npts, dt, w0=wl2om(wl_center) - np.floor(Npts/2) * dw)
 
     def process_trace(self):
         if "trace_loaded" not in self.state:
@@ -1643,8 +1655,16 @@ class Retriever(QObject):
 
     def process_spectrum(self):
         if "spectrum_loaded" not in self.state:
-            popup_message("Error", "Please load a spectrum first!")
-            return
+            popup_message("Warning", "No spectrum loaded, will work without it")
+            if self.data_in is None:
+                self.data_in = DataIn(source="experimental")
+
+
+            self.data_in.update(
+                dict(raw_spectrum={"data": data.astype("double"), "x_axis": axes["x_axis"]})
+            )
+
+            # return
         if "trace_loaded" not in self.state:
             popup_message("Error", "Please load a trace first!")
             return
@@ -2023,8 +2043,19 @@ class Retriever(QObject):
 
         if self.data_in is None:
             self.data_in = DataIn(source="experimental")
+
+        scaling_wl = self.settings.child(
+            "data_in_info", "spectrum_in_info", "wl_scaling"
+        ).value()
+
+        axes["x_axis"]["data"] *= scaling_wl
+
         self.data_in.update(
-            dict(raw_spectrum={"data": data.astype("double"), "x_axis": axes["x_axis"]})
+            dict(
+                raw_spectrum={"data": data.astype("double"), "x_axis": axes["x_axis"]},
+                spectrum_file_path=fname,
+                spectrum_node_path=node_path,
+            )
         )
 
         self.settings.child("processing", "linearselect_spectrum", "wl0_s").setValue(

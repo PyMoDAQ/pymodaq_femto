@@ -1,5 +1,5 @@
-from PyQt5.QtCore import QObject
-from PyQt5 import QtWidgets
+from qtpy.QtCore import QObject
+from qtpy import QtWidgets
 import matplotlib
 matplotlib.use('Qt5Agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT as NavigationToolbar

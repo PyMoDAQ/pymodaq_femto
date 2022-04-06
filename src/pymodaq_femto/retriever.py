@@ -7,10 +7,10 @@ import numpy as np
 from types import SimpleNamespace
 import io
 from contextlib import redirect_stdout
-from PyQt5 import QtGui, QtWidgets, QtCore
-from PyQt5.QtCore import Qt, QObject, pyqtSlot, QThread, pyqtSignal, QLocale
-from PyQt5.QtGui import QIcon, QPixmap
-from PyQt5.QtGui import QTextCursor
+from qtpy import QtGui, QtWidgets, QtCore
+from qtpy.QtCore import Qt, QObject, Slot, QThread, Signal, QLocale
+from qtpy.QtGui import QIcon, QPixmap
+from qtpy.QtGui import QTextCursor
 from pyqtgraph.dockarea import Dock
 from pyqtgraph.parametertree import Parameter, ParameterTree
 from pymodaq.daq_utils import daq_utils as utils
@@ -299,8 +299,8 @@ class Retriever(QObject):
     Main class initializing a DAQ_Scan module with its dashboard and scanning control panel
     """
 
-    status_signal = pyqtSignal(str)
-    retriever_signal = pyqtSignal(str)
+    status_signal = Signal(str)
+    retriever_signal = Signal(str)
     params_in = [
         params_algo,
         {
@@ -447,7 +447,7 @@ class Retriever(QObject):
                             "title": "Npoints:",
                             "name": "npoints",
                             "type": "list",
-                            "values": [2 ** n for n in range(8, 16)],
+                            "limits": [2 ** n for n in range(8, 16)],
                             "value": 1024,
                             "tip": "Number of points for the temporal and Fourier Transform Grid",
                         },
@@ -579,7 +579,7 @@ class Retriever(QObject):
                     "title": "Algo type:",
                     "name": "algo_type",
                     "type": "list",
-                    "values": retriever_algos,
+                    "limits": retriever_algos,
                     "tip": "Retriever Algorithm",
                 },
                 {
@@ -607,14 +607,14 @@ class Retriever(QObject):
                     "title": "Keep spectral intensity fixed",
                     "name": "fix_spectrum",
                     "type": "bool",
-                    "values": False,
+                    "value": False,
                     "tip": "When true, only lets the phase evolve during the algorithm",
                 },
                 {
                     "title": "Initial guess:",
                     "name": "guess_type",
                     "type": "list",
-                    "values": ["Random gaussian", "Fundamental spectrum"],
+                    "limits": ["Random gaussian", "Fundamental spectrum"],
                     "tip": "Retriever Algorithm",
                 },
                 {
@@ -678,7 +678,7 @@ class Retriever(QObject):
                     "title": "Material 1:",
                     "name": "material1",
                     "type": "list",
-                    "values": air_first_material_names,
+                    "limits": air_first_material_names,
                     "readonly": False,
                     "tip": "First material",
                 },
@@ -693,7 +693,7 @@ class Retriever(QObject):
                     "title": "Material 2:",
                     "name": "material2",
                     "type": "list",
-                    "values": material_names,
+                    "limits": material_names,
                     "readonly": False,
                     "tip": "Second material",
                 },
@@ -742,10 +742,10 @@ class Retriever(QObject):
                     "readonly": True,
                     "tip": "Full width at half maximum of propagated pulse",
                 },
-                # {'title': 'Fourier Limit (fs)', 'name': 'fwhm_ftl', 'type': 'float', 'values': 0,
+                # {'title': 'Fourier Limit (fs)', 'name': 'fwhm_ftl', 'type': 'float', 'limits': 0,
                 # 'readonly': True,
                 # 'tip': 'Full width at half maximum of fourier transformed pulse'},
-                # {'title': 'Peak intensity compared to FTL (%)', 'name': 'ratio_main_pulse', 'type': 'float', 'values': 0.0,
+                # {'title': 'Peak intensity compared to FTL (%)', 'name': 'ratio_main_pulse', 'type': 'float', 'limits': 0.0,
                 # 'readonly': True,
                 # 'tip': 'Peak intensity compared to the Fourier transform limited pulse'},
                 {
@@ -1802,7 +1802,7 @@ class Retriever(QObject):
         self.info_widget.insertPlainText(info + "\n")
         self.info_widget.moveCursor(QTextCursor.End)
 
-    @pyqtSlot(list)
+    @Slot(list)
     def update_retriever(self, args):
         max = 0.8 * np.max([np.abs(np.max(args[0])), np.abs(np.min(args[0]))])
         self.viewer_live_trace.ui.histogram_red.setHistogramRange(-max, max)
@@ -1830,7 +1830,7 @@ class Retriever(QObject):
             labels=["Spectral Intensity"],
         )
 
-    @pyqtSlot(SimpleNamespace)
+    @Slot(SimpleNamespace)
     def display_results(self, result):
         self.result = result
         self.state.append("result_ok")
@@ -1863,7 +1863,7 @@ class Retriever(QObject):
         )
         self.data_canvas.draw()
 
-    @pyqtSlot(QtCore.QRectF)
+    @Slot(QtCore.QRectF)
     def update_ROI(self, rect=QtCore.QRectF(0, 0, 1, 1)):
         self.settings.child("processing", "ROIselect", "x0").setValue(int(rect.x()))
         self.settings.child("processing", "ROIselect", "y0").setValue(int(rect.y()))
@@ -2085,9 +2085,9 @@ class Retriever(QObject):
 
 
 class RetrieverWorker(QObject):
-    result_signal = pyqtSignal(SimpleNamespace)
-    status_sig = pyqtSignal(str)
-    callback_sig = pyqtSignal(list)
+    result_signal = Signal(SimpleNamespace)
+    status_sig = Signal(str)
+    callback_sig = Signal(list)
 
     def __init__(self, data_in, pnps, settings):
         super().__init__()
@@ -2099,7 +2099,7 @@ class RetrieverWorker(QObject):
     # def send_callback(self, pnps):
     #     self.callback_sig.emit([pnps.Tmn, [pnps.parameter, pnps.process_w], pnps.pulse.field, pnps.field.t])
 
-    @pyqtSlot(str)
+    @Slot(str)
     def command_retriever(self, command):
         if command == "start":
             self.start_retriever()

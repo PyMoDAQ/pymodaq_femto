@@ -1,5 +1,5 @@
-from PyQt5.QtCore import QObject
-from PyQt5 import QtWidgets
+from qtpy.QtCore import QObject
+from qtpy import QtWidgets
 
 from pathlib import Path
 from pyqtgraph.parametertree import Parameter, ParameterTree
@@ -27,19 +27,18 @@ nlprocesses = list(_PNPS_CLASSES[methods[0]].keys())
 materials = OrderedDict(FS=FS, BK7=BK7)
 
 
-
 class Simulator(QObject):
     params = [
             {'title': 'Show Pulse', 'name': 'show_pulse', 'type': 'action', 'visible': False},
             {'title': 'Show Trace', 'name': 'show_trace', 'type': 'action', 'visible': False},
             {'title': 'Show both', 'name': 'show_plots', 'type': 'action', 'visible': False},
-            {'title': 'Pulse Source:', 'name': 'pulse_source', 'type': 'list', 'values': ['Simulated', 'From File'],
+            {'title': 'Pulse Source:', 'name': 'pulse_source', 'type': 'list', 'limits': ['Simulated', 'From File'],
              },
 
             {'title': 'Pulse Settings:', 'name': 'pulse_settings', 'type': 'group', 'children': [
                 {'title': 'FWHM (fs):', 'name': 'fwhm_time', 'type': 'float', 'value': 5,
                  'tip': 'Fourier Limited Pulse duration in femtoseconds'},
-                {'title': 'Shaping type:', 'name': 'shaping_type', 'type': 'list', 'values': ['Taylor', 'Gaussian'],
+                {'title': 'Shaping type:', 'name': 'shaping_type', 'type': 'list', 'limits': ['Taylor', 'Gaussian'],
                  },
                 {'title': 'Npulses:', 'name': 'npulses', 'type': 'int', 'value': 1,
                  'tip': 'Number of pulse in a sequence'},
@@ -68,17 +67,17 @@ class Simulator(QObject):
             ]},
             {'title': 'Algorithm Options:', 'name': 'algo', 'type': 'group', 'children': [
                 {'title': 'Method:', 'name': 'method', 'type': 'list',
-                 'values': methods,
+                 'limits': methods,
                  'tip': 'Characterization Method'},
                 {'title': 'NL process:', 'name': 'nlprocess', 'type': 'list',
-                 'values': nlprocesses,
+                 'limits': nlprocesses,
                  'tip': 'Non Linear process used in the experiment'},
                 {'title': 'Alpha (rad):', 'name': 'alpha', 'type': 'float', 'value': 1,
                  'tip': 'amplitude of the phase pattern (in rad)', 'visible': False},
                 {'title': 'Gamma (Hz):', 'name': 'gamma', 'type': 'float', 'value': 10,
                  'tip': 'frequency of the phase pattern (in Hz)', 'visible': False},
                 {'title': 'Material:', 'name': 'material', 'type': 'list',
-                 'values': list(materials.keys()), 'visible': False,
+                 'limits': list(materials.keys()), 'visible': False,
                  'tip': 'Material used for the Dscan measurement'},
                 {'title': 'Dscan Parameter Scan:', 'name': 'dscan_parameter', 'type': 'group', 'visible': False,
                  'children': [
@@ -102,14 +101,14 @@ class Simulator(QObject):
             {'title': 'Grid settings:', 'name': 'grid_settings', 'type': 'group', 'children': [
                 {'title': 'lambda0 (nm):', 'name': 'wl0', 'type': 'float', 'value': 750,
                  'tip': 'Central Wavelength of the Pulse spectrum and frequency grid'},
-                {'title': 'Npoints:', 'name': 'npoints', 'type': 'list', 'values': [2 ** n for n in range(8, 16)],
+                {'title': 'Npoints:', 'name': 'npoints', 'type': 'list', 'limits': [2 ** n for n in range(8, 16)],
                  'value': 1024,
                  'tip': 'Number of points for the temporal and Fourier Transform Grid'},
                 {'title': 'Time resolution (fs):', 'name': 'time_resolution', 'type': 'float', 'value': 0.5,
                  'tip': 'Time spacing between 2 points in the time grid'},
             ]},
             {'title': 'Plot settings:', 'name': 'plot_settings', 'type': 'group', 'children': [
-                {'title': 'Units:', 'name': 'units', 'type': 'list', 'values': ['nm', 'Hz'],
+                {'title': 'Units:', 'name': 'units', 'type': 'list', 'limits': ['nm', 'Hz'],
                  'tip': 'Plot ad a function of the wavelength (in nm) or as a function of the angular frequency (in Hz)'},
                 {'title': 'Autolimits?:', 'name': 'autolimits', 'type': 'bool', 'value': True,
                  'tip': 'Restrict the data plot to limits given from marginals and threshold'},
@@ -122,7 +121,7 @@ class Simulator(QObject):
                 {'title': 'Limit max:', 'name': 'limit_max', 'type': 'float', 'value': 1100,
                  'tip': 'Max  value of the frequency axis for plotting (Hz or nm)', 'visible': False},
                 {'title': 'Npts:', 'name': 'Npts', 'type': 'list',
-                 'values': [2 ** n for n in range(8, 16)], 'value': 512,
+                 'limits': [2 ** n for n in range(8, 16)], 'value': 512,
                  'tip': 'Number of points to display the frequency axis'},
             ]},
         ]

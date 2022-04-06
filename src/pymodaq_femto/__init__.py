@@ -1,6 +1,11 @@
 from pathlib import Path
 from pyqtgraph.graphicsItems.GradientEditorItem import Gradients
 from collections import OrderedDict
+from . import materials
+
+NICE_NAME = 'FemtoRetriever'
+module_name = 'retriever'
+klass_name = 'Retriever'
 
 # #### including dscan
 from pypret.pnps import _PNPS_CLASSES

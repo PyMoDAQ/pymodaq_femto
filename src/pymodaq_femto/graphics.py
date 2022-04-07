@@ -11,8 +11,13 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.ticker import EngFormatter
 from pypret import Pulse, lib
-from pypret.frequencies import convert
+from pypret.frequencies import convert, om2wl, wl2om
 from pypret.graphics import plot_complex, plot_meshdata
+import math
+
+def truncate(number, digits) -> float:
+    stepper = 10.0 ** digits
+    return math.trunc(stepper * number) / stepper
 
 
 class MplCanvas(FigureCanvasQTAgg):
@@ -243,6 +248,45 @@ class RetrievalResultPlot:
         rr = self.retrieval_result
         # reconstruct a pulse from that
         pulse = Pulse(rr.pnps.ft, rr.pnps.w0, unit="om")
+        pulse.spectrum = rr.pulse_retrieved  # the retrieved pulse
+
+        if rr.pnps.method =='dscan':
+            # Look for optimal insertion
+            propagated_pulse = Pulse(rr.pnps.ft, rr.pnps.w0, unit="om")
+
+            precision = pulse.dt/10
+            item = rr.pnps.material
+
+            w1, w2 = sorted(wl2om(np.array(item._range)))
+            w = propagated_pulse.w + propagated_pulse.w0
+            valid = (w >= w1) & (w <= w2)
+
+            w = w[valid]
+            k = item.k(w, unit="om")
+            k0 = item.k(propagated_pulse.w0, unit="om")
+            k1 = item.k(propagated_pulse.w0 + propagated_pulse.ft.dw, unit="om")
+            dk = (k1 - k0) / propagated_pulse.ft.dw
+
+            # Add material dispersion without 0th and 1st Taylor orders (they don't change the pulse)
+            kfull = np.zeros_like(propagated_pulse.w)
+            kfull[valid] = k - k0 - dk * propagated_pulse.w[valid]
+
+            shortest_fwhm = 1e50
+            optimal_insertion = 0
+            optimal_pulse = Pulse(rr.pnps.ft, rr.pnps.w0, unit="om")
+
+            for insertion in rr.pnps.parameter:
+                propagated_pulse.spectrum = pulse.spectrum
+                propagated_pulse.spectrum *= np.exp(1j * kfull * insertion)
+                fwhm = propagated_pulse.fwhm(precision)
+
+                if fwhm < shortest_fwhm:
+                    shortest_fwhm = fwhm
+                    optimal_insertion = insertion
+                    optimal_pulse.spectrum = propagated_pulse.spectrum
+
+            pulse.spectrum = optimal_pulse.spectrum    # Use shortest pulse for display
+
         if self.fig is None:
             fig = plt.figure(figsize=(30.0 / 2.54, 20.0 / 2.54))
         else:
@@ -260,7 +304,6 @@ class RetrievalResultPlot:
         ax22 = ax2.twinx()
 
         # Plot in time domain
-        pulse.spectrum = rr.pulse_retrieved  # the retrieved pulse
         if oversampling:
             t = np.linspace(pulse.t[0], pulse.t[-1], pulse.N * oversampling)
             field2 = pulse.field_at(t)
@@ -288,7 +331,12 @@ class RetrievalResultPlot:
 
         fx = EngFormatter(unit="s")
         ax1.xaxis.set_major_formatter(fx)
-        ax1.set_title("time domain")
+        if rr.pnps.method == "dscan":
+            ax1.set_title("Temporal intensity at insertion = " + str(truncate(optimal_insertion*1000,4))
+                          + 'mm [FWHM = ' + str(truncate(shortest_fwhm * 1e15, 4)) + " fs].")
+        else:
+            ax1.set_title("Temporal intensity")
+
         ax1.set_xlabel("time")
         ax1.set_ylabel(yaxis)
         ax12.set_ylabel("phase (rad)")
@@ -374,6 +422,12 @@ class RetrievalResultPlot:
             ax.set_xlim(
                 lib.limit(md.axes[1], md.marginals(axes=1), threshold=1e-2, padding=0.1)
             )
+
+        # if rr.pnps.method == 'dscan':
+        #     wl_lim = ax3.get_xlim()
+        #     d = (wl_lim[1]-wl_lim[0])/5
+        #     ax3.annotate("", xy=(-0.5*d, optimal_insertion), xytext=(-1.5*d, optimal_insertion), xycoords='axes fraction',
+        #     arrowprops=dict(arrowstyle="->"))
 
         ax1.grid()
         ax2.grid()

@@ -41,7 +41,7 @@ from pyqtgraph.graphicsItems.GradientEditorItem import Gradients
 from pymodaq_femto import _PNPS_CLASSES
 from pypret.retrieval.retriever import _RETRIEVER_CLASSES
 import warnings
-import math
+import math, os
 import inspect
 import pymodaq_femto.materials
 
@@ -292,7 +292,6 @@ def popup_message(title, text):
     msg.setText(text)
     msg.setIcon(QtWidgets.QMessageBox.Warning)
     msg.exec_()
-
 
 class Retriever(QObject):
     """
@@ -960,6 +959,8 @@ class Retriever(QObject):
         self.toolbar.addAction(self.load_from_simulation_action)
         self.toolbar.addSeparator()
         self.toolbar.addAction(self.save_data_action)
+        self.toolbar.addSeparator()
+        self.toolbar.addAction(self.save_settings_action)
         self.toolbar.addAction(self.recall_settings_action)
 
 
@@ -2071,10 +2072,68 @@ class Retriever(QObject):
         h5saver.close_file()
 
     def save_settings_to_file(self):
-        return
+        path_to_file = 'resources/retriever_settings.h5'
+
+        msg = QtWidgets.QMessageBox()
+        msg.setWindowTitle('Save settings to file')
+
+        if os.path.exists(path_to_file):
+            msg.setText('Do you want to overwrite the file with the current settings?')
+        else:
+            msg.setText('Should I save the current settings to file?')
+        msg.setStandardButtons(QtWidgets.QMessageBox.Save | QtWidgets.QMessageBox.Cancel)
+        msg.setDefaultButton(QtWidgets.QMessageBox.Save)
+        msg.setIcon(QtWidgets.QMessageBox.Question)
+        answer = msg.exec_()
+
+        if answer == QtWidgets.QMessageBox.Save:
+            self.save_data('resources/retriever_settings.h5')
 
     def recall_settings_from_file(self):
-        return
+        path_to_file = 'resources/retriever_settings.h5'
+
+        if not os.path.exists(path_to_file):
+            popup_message("Error", "Did not find a file with saved settings.")
+        else:
+            h5file = self.h5browse.open_file(path_to_file)
+            data, axes, nav_axes, is_spread = self.h5browse.get_h5_data('/PyMoDAQFemtoAnalysis/DataIn/FunSpectrum/Data')
+            attr_dict, settings, scan_settings, pixmaps = self.h5browse.get_h5_attributes('/PyMoDAQFemtoAnalysis')
+            self.h5browse.close_file()
+
+            saved_settings = ioxml.XML_string_to_parameter(settings)
+            saved_param = Parameter.create(name="saved_settings", type="group", children=saved_settings)
+
+            # Algo settings
+            for child in putils.iter_children_params(self.settings.child("algo"), childlist=[]):
+                path = ["algo"]
+                path.extend(self.settings.child("algo").childPath(child))
+                self.settings.child(*path).setValue(saved_param.child('dataIN_settings',*path).value())
+            # Data Info settings
+            for child in putils.iter_children_params(self.settings.child("data_in_info"), childlist=[]):
+                path = ["data_in_info"]
+                path.extend(self.settings.child("data_in_info").childPath(child))
+                self.settings.child(*path).setValue(saved_param.child('dataIN_settings',*path).value())
+            # Processing settings
+            for child in putils.iter_children_params(self.settings.child("processing"), childlist=[]):
+                path = ["processing"]
+                path.extend(self.settings.child("processing").childPath(child))
+                self.settings.child(*path).setValue(saved_param.child('dataIN_settings',*path).value())
+            #Retrieving settings
+            for child in putils.iter_children_params(self.settings.child("retrieving"), childlist=[]):
+                path = ["retrieving"]
+                path.extend(self.settings.child("retrieving").childPath(child))
+                self.settings.child(*path).setValue(saved_param.child('dataIN_settings',*path).value())
+
+            # data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
+            # data_in_group = h5saver.get_set_group(h5saver.raw_group, "DataIn")
+            # trace_group = h5saver.get_set_group(data_in_group, "NLTrace")
+            # spectrum_group = h5saver.get_set_group(data_in_group, "FunSpectrum")
+            # h5saver.add_data(trace_group, self.data_in["raw_trace"], scan_type="")
+            # h5saver.add_data(spectrum_group, self.data_in["raw_spectrum"], scan_type="")
+            # settings = ioxml.XML_string_to_parameter()
+
+
+            self.h5browse.close_file()
 
     def restart_fun(self, ask=False):
         ret = False

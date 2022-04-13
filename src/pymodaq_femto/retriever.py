@@ -17,9 +17,10 @@ from pymodaq.daq_utils import daq_utils as utils
 from pymodaq.daq_utils import gui_utils as gutils
 from pymodaq.daq_utils.parameter import utils as putils, ioxml
 from pymodaq.daq_utils.h5modules import browse_data
-from pymodaq.daq_utils.plotting.viewer2D.viewer2D_main import Viewer2D
-from pymodaq.daq_utils.plotting.viewer1D.viewer1D_main import Viewer1D
-from pymodaq.daq_utils.plotting.viewer0D.viewer0D_main import Viewer0D
+from pymodaq.daq_utils.plotting.data_viewers.viewer0D import Viewer0D
+from pymodaq.daq_utils.plotting.data_viewers.viewer1D import Viewer1D
+from pymodaq.daq_utils.plotting.data_viewers.viewer2D import Viewer2D
+from pymodaq.daq_utils.managers.action_manager import QAction
 from pymodaq.daq_utils.managers.roi_manager import LinearROI
 from pymodaq_femto.graphics import (
     RetrievalResultPlot,
@@ -836,7 +837,7 @@ class Retriever(QObject):
         )
 
         self.viewer_trace_in.ROI_select_signal.connect(self.update_ROI)
-        self.viewer_trace_in.ROIselect_action.triggered.connect(self.show_ROI)
+        self.viewer_trace_in.get_action('ROIselect').triggered.connect(self.show_ROI)
 
         self.settings.child("algo", "miips_parameter").hide()
         self.settings.child("algo", "dscan_parameter").hide()
@@ -904,6 +905,7 @@ class Retriever(QObject):
         # setup toolbar
         self.toolbar = QtWidgets.QToolBar()
         self.mainwindow.addToolBar(self.toolbar)
+
         if self.dashboard is not None:
             if self.dashboard.scan_module is not None:
                 self.load_last_scan_action = gutils.QAction(
@@ -914,32 +916,33 @@ class Retriever(QObject):
                 self.toolbar.addSeparator()
                 self.load_last_scan_action.triggered.connect(self.load_last_scan)
 
-        self.load_trace_in_action = gutils.QAction(
+
+        self.load_trace_in_action = QAction(
             QIcon(QPixmap(":/icons/Icon_Library/Open_2D.png")),
             "Load Experimental Trace",
         )
-        self.load_spectrum_in_action = gutils.QAction(
+        self.load_spectrum_in_action = QAction(
             QIcon(QPixmap(":/icons/Icon_Library/Open_1D.png")),
             "Load Experimental Spectrum",
         )
-        self.gen_trace_in_action = gutils.QAction(
+        self.gen_trace_in_action = QAction(
             QIcon(QPixmap(":/icons/Icon_Library/ini.png")),
             "Simulate Experimental Trace",
         )
-        self.load_from_simulation_action = gutils.QAction(
+        self.load_from_simulation_action = QAction(
             QIcon(QPixmap(":/icons/Icon_Library/Open_sim.png")),
             "Load Data from Simulation",
         )
 
-        self.save_data_action = gutils.QAction(
+        self.save_data_action = QAction(
             QIcon(QPixmap(":/icons/Icon_Library/Save.png")), "Save Data"
         )
 
-        self.save_settings_action = gutils.QAction(
+        self.save_settings_action = QAction(
             QIcon(QPixmap("resources/save_settings.png")),
             "Save current settings",
         )
-        self.recall_settings_action = gutils.QAction(
+        self.recall_settings_action = QAction(
             QIcon(QPixmap("resources/load_settings.png")),
             "Recall saved settings",
         )
@@ -968,9 +971,12 @@ class Retriever(QObject):
         #  setup data in dock
 
         data_in_splitter = QtWidgets.QSplitter()
-        self.viewer_trace_in = Viewer2D()
-        self.viewer_trace_in.ui.histogram_red.gradient.restoreState(Gradients["femto"])
-        self.viewer_trace_in.aspect_ratio_action.click()
+        self.viewer_trace_in = Viewer2D(QtWidgets.QWidget())
+        self.viewer_trace_in.histogrammer.set_gradient(gradient="femto")        # Change default colormap
+
+        for key in ['red', 'green', 'blue']:        # Hides all RGB controls (not needed for a trace)
+            self.viewer_trace_in.get_action(key).setVisible(False)
+
 
         pos = self.viewer_trace_in.roi_manager.viewer_widget.plotItem.vb.viewRange()[0]
         self.linear_region = LinearROI(index=0, pos=pos)
@@ -1008,12 +1014,11 @@ class Retriever(QObject):
         # #################################################
         # setup retriever dock
         retriever_widget = QtWidgets.QSplitter()
-        self.viewer_live_trace = Viewer2D()
-        self.viewer_live_trace.ui.histogram_red.gradient.restoreState(
-            Gradients["femto_error"]
-        )
-        self.viewer_live_trace.aspect_ratio_action.trigger()
-        # self.viewer_live_trace.auto_levels_action.trigger()
+        self.viewer_live_trace = Viewer2D(QtWidgets.QWidget())
+        self.viewer_live_trace.histogrammer.set_gradient(gradient="femto_error")
+        for key in ['red', 'green', 'blue']:        # Hides all RGB controls (not needed for a trace)
+            self.viewer_trace_in.get_action(key).setVisible(False)
+
         self.viewer_live_time = Viewer1D()
         self.viewer_live_lambda = Viewer1D()
         self.info_widget = QtWidgets.QTextEdit()
@@ -1125,13 +1130,8 @@ class Retriever(QObject):
                     else:
                         self.settings.child("algo", "material").hide()
 
-                elif (
-                        param.name()
-                        in putils.iter_children(
-                    self.settings.child("processing", "ROIselect"), []
-                )
-                        and "ROIselect" in param.parent().name()
-                ):  # to be sure
+                elif (param.name() in putils.iter_children( self.settings.child("processing", "ROIselect"), [] )
+                        and "ROIselect" in param.parent().name() ):  # to be sure
                     # a param named 'y0' for instance will not collide with the y0 from the ROI
                     try:
                         self.viewer_trace_in.ROI_select_signal.disconnect(
@@ -1139,13 +1139,11 @@ class Retriever(QObject):
                         )
                     except Exception as e:
                         pass
-                    if self.settings.child(
-                            "processing", "ROIselect", "crop_trace"
-                    ).value():
-                        if not self.viewer_trace_in.ROIselect_action.isChecked():
-                            self.viewer_trace_in.ROIselect_action.trigger()
+                    if self.settings.child( "processing", "ROIselect", "crop_trace" ).value():
+                        if not self.viewer_trace_in.get_action('ROIselect').isChecked():
+                            self.viewer_trace_in.get_action('ROIselect').trigger()
                             QtWidgets.QApplication.processEvents()
-                        self.viewer_trace_in.ui.ROIselect.setPos(
+                        self.viewer_trace_in.ROIselect.setPos(
                             self.settings.child(
                                 "processing", "ROIselect", "x0"
                             ).value(),
@@ -1153,7 +1151,7 @@ class Retriever(QObject):
                                 "processing", "ROIselect", "y0"
                             ).value(),
                         )
-                        self.viewer_trace_in.ui.ROIselect.setSize(
+                        self.viewer_trace_in.ROIselect.setSize(
                             [
                                 self.settings.child(
                                     "processing", "ROIselect", "width"
@@ -1165,8 +1163,8 @@ class Retriever(QObject):
                         )
                         self.viewer_trace_in.ROI_select_signal.connect(self.update_ROI)
                     else:
-                        if self.viewer_trace_in.ROIselect_action.isChecked():
-                            self.viewer_trace_in.ROIselect_action.trigger()
+                        if self.viewer_trace_in.get_action('ROIselect').isChecked():
+                            self.viewer_trace_in.get_action('ROIselect').trigger()
                 elif (
                         param.name()
                         in putils.iter_children(
@@ -1537,6 +1535,7 @@ class Retriever(QObject):
 
         self.display_trace_in()
         self.viewer_trace_in.show_hide_histogram()
+
         if not "trace_loaded" in self.state:   # We dont clear the ROIs if this is not the first loaded trace
             self.viewer_trace_in.ROIselect_action.trigger()
 
@@ -1544,6 +1543,10 @@ class Retriever(QObject):
         self.viewer_trace_in.setImage(self.data_in["raw_trace"]["data"])
         self.viewer_trace_in.x_axis = self.data_in["raw_trace"]["x_axis"]
         self.viewer_trace_in.y_axis = self.data_in["raw_trace"]["y_axis"]
+        self.viewer_trace_in.get_action('autolevels').trigger() # Auto scale colormap
+        for key in ['red', 'green', 'blue']:        # Hides all RGB controls (not needed for a trace)
+            if not key == 'red': self.viewer_trace_in.get_action(key).trigger()
+            self.viewer_trace_in.get_action(key).setVisible(False)
 
     def display_spectrum_in(self):
         self.viewer_spectrum_in.show_data(
@@ -1559,26 +1562,32 @@ class Retriever(QObject):
     def show_ROI(self):
         # self.settings.child('processing', 'ROIselect').setOpts(
         #     visible=self.viewer_trace_in.ROIselect_action.isChecked())
-        data = self.data_in["raw_trace"]["data"]
-        axes = [np.arange(0, data.shape[0]), np.arange(0, data.shape[1])]
-        axes_index = list(range(data.ndim))
-        marginals = lib.marginals(data)
-        limits = []
-        for index in axes_index:
-            limit = lib.limit(
-                axes[index], marginals[index], threshold=1e-2, padding=0.25
+        if "trace_loaded" in self.state:
+            data = self.data_in["raw_trace"]["data"]
+            axes = [np.arange(0, data.shape[0]), np.arange(0, data.shape[1])]
+            axes_index = list(range(data.ndim))
+            marginals = lib.marginals(data)
+            limits = []
+            for index in axes_index:
+                limit = lib.limit(
+                    axes[index], marginals[index], threshold=1e-2, padding=0.25
+                )
+                limits.append(limit)
+
+            self.viewer_trace_in.ROIselect.setPos((limits[1][0], limits[0][0]))
+            self.viewer_trace_in.ROIselect.setSize(
+                (limits[1][1] - limits[1][0], limits[0][1] - limits[0][0])
             )
-            limits.append(limit)
 
-        self.viewer_trace_in.ui.ROIselect.setPos((limits[1][0], limits[0][0]))
-        self.viewer_trace_in.ui.ROIselect.setSize(
-            (limits[1][1] - limits[1][0], limits[0][1] - limits[0][0])
-        )
+            self.linear_region.setPos(limits[1])
 
-        self.linear_region.setPos(limits[1])
+            pos = self.viewer_trace_in.ROIselect.pos()
+            size = self.viewer_trace_in.ROIselect.size()
 
-        pos = self.viewer_trace_in.ui.ROIselect.pos()
-        size = self.viewer_trace_in.ui.ROIselect.size()
+        else:
+            pos = (0,0)
+            size = (1,1)
+
         self.update_ROI(QtCore.QRectF(pos[0], pos[1], size[0], size[1]))
 
     @Slot(QtCore.QRectF)
@@ -1829,10 +1838,21 @@ class Retriever(QObject):
 
     @Slot(list)
     def update_retriever(self, args):
+
+
         max = 0.8 * np.max([np.abs(np.max(args[0])), np.abs(np.min(args[0]))])
-        self.viewer_live_trace.ui.histogram_red.setHistogramRange(-max, max)
-        self.viewer_live_trace.ui.histogram_red.setLevels(-max, max)
+        self.viewer_live_trace.histogrammer.set_gradient(gradient="femto_error")
+
         self.viewer_live_trace.setImage(args[0])
+        self.viewer_live_trace.get_action('autolevels').trigger()
+        # for key in ['red', 'green', 'blue']:        # Hides all RGB controls (not needed for a trace)
+        #     if not key == 'red': self.viewer_live_trace.get_action(key).trigger()
+        #     self.viewer_live_trace.get_action(key).setVisible(False)
+        # self.viewer_live_trace.get_action('histo').trigger()
+        #
+        # self.viewer_live_trace.histogrammer._histograms['red'].item.setLevels(-max, max)
+        # self.viewer_live_trace.histogrammer._histograms['red'].item.setHistogramRange(-max, max)
+
         self.viewer_live_trace.x_axis = utils.Axis(
             data=args[2], label="Time", units="s"
         )

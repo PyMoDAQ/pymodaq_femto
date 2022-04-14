@@ -1532,9 +1532,7 @@ class Retriever(QObject):
         )
 
         self.update_trace_info(self.data_in["raw_trace"])
-
         self.display_trace_in()
-        self.viewer_trace_in.show_hide_histogram()
 
         if not "trace_loaded" in self.state:   # We dont clear the ROIs if this is not the first loaded trace
             self.viewer_trace_in.ROIselect_action.trigger()
@@ -1547,6 +1545,8 @@ class Retriever(QObject):
         for key in ['red', 'green', 'blue']:        # Hides all RGB controls (not needed for a trace)
             if not key == 'red': self.viewer_trace_in.get_action(key).trigger()
             self.viewer_trace_in.get_action(key).setVisible(False)
+        if not self.viewer_trace_in.is_action_checked('histo'):
+            self.viewer_trace_in.get_action('histo').trigger()
 
     def display_spectrum_in(self):
         self.viewer_spectrum_in.show_data(
@@ -2116,7 +2116,8 @@ class Retriever(QObject):
             popup_message("Error", "Did not find a file with saved settings.")
         else:
             h5file = self.h5browse.open_file(path_to_file)
-            data, axes, nav_axes, is_spread = self.h5browse.get_h5_data('/PyMoDAQFemtoAnalysis/DataIn/FunSpectrum/Data')
+            fund_data, fund_axes, fund_nav_axes, is_spread = self.h5browse.get_h5_data('/PyMoDAQFemtoAnalysis/DataIn/FunSpectrum/Data')
+            trace_data, trace_axes, trace_nav_axes, is_spread = self.h5browse.get_h5_data('/PyMoDAQFemtoAnalysis/DataIn/NLTrace/Data')
             attr_dict, settings, scan_settings, pixmaps = self.h5browse.get_h5_attributes('/PyMoDAQFemtoAnalysis')
             self.h5browse.close_file()
 
@@ -2152,7 +2153,26 @@ class Retriever(QObject):
             # h5saver.add_data(spectrum_group, self.data_in["raw_spectrum"], scan_type="")
             # settings = ioxml.XML_string_to_parameter()
 
+            if self.data_in is None:
+                self.data_in = DataIn(source="experimental")
 
+            # Load spectrum
+            self.data_in.update(
+                dict(
+                    raw_spectrum={"data": fund_data.astype("double"), "x_axis": fund_axes["x_axis"]},
+                )
+            )
+            self.update_spectrum_info(self.data_in["raw_spectrum"])
+            self.display_spectrum_in()
+
+            # Load trace
+            self.data_in.update(
+                dict(
+                    raw_trace={"data": trace_data, "x_axis": trace_axes['x_axis'], "y_axis": trace_axes['y_axis']},
+                )
+            )
+            self.update_trace_info(self.data_in["raw_trace"])
+            self.display_trace_in()
             self.h5browse.close_file()
 
     def restart_fun(self, ask=False):

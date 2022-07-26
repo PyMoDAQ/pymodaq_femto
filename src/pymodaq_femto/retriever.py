@@ -371,7 +371,7 @@ class Retriever(QObject):
                             "title": "Parameter scaling",
                             "name": "param_scaling",
                             "type": "float",
-                            "value": 1e-6,
+                            "value": 1,
                             "readonly": False,
                             "tip": "Scaling to go from the trace parameter values to delay in seconds, insertion in m (dscan) "
                                    "or phase in rad (miips)",
@@ -1643,7 +1643,7 @@ class Retriever(QObject):
         if len(np.unique(self.ft.w)) == 1:
             popup_message(
                 "Error",
-                "Frequency axis only has one point. Check time resolution and Npoints.",
+                "Frequency axis only has one point. Please check that i) the correct method and NL process are selected, ii) the grid settings in 'Processing' are correct. In particular, check that 'Time resolution (fs)' makes sense - typically it should be on the order of 1 fs for a standard femtosecond laser pulse.",
             )
             return
 
@@ -1730,7 +1730,11 @@ class Retriever(QObject):
 
         self.state.append("spectrum_processed")
         self.pulse_canvas.figure.clf()
-        PulsePlot(self.data_in["pulse_in"], self.pulse_canvas.figure)
+
+        try:
+            PulsePlot(self.data_in["pulse_in"], self.pulse_canvas.figure)
+        except ValueError:
+            popup_message("Error", "The wavelength axis of the processed spectrum seems to be wrong. Please check that i) the correct method and NL methods are selected, ii) the grid settings in 'Processing' are correct. In particular, check that 'Time resolution (fs)' makes sense - typically it is on the order of 1 fs for a standard femtosecond laser pulse.")
         self.pulse_canvas.draw()
 
     def process_trace(self):

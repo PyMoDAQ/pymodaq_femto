@@ -26,7 +26,7 @@ __ http://pymodaq.cnrs.fr
 Information
 ***********
 
-GitHub repo: https://github.com/CEMES-CNRS/pymodaq_femto
+GitHub repo: https://github.com/PyMoDAQ/pymodaq_femto
 
 Documentation: http://pymodaq_femto.cnrs.fr/
 

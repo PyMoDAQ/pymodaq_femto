@@ -39,7 +39,7 @@ Documentation
 You want to contribute?
 ***********************
 
-If you're willing to help, you can clone the up-to-date GitHub repo: https://github.com/CEMES-CNRS/pymodaq_femto using git command line or
+If you're willing to help, you can clone the up-to-date GitHub repo: https://github.com/PyMoDAQ/pymodaq_femto using git command line or
 GitHub Desktop. I advise to create a dedicated conda environment for this and install PyMoDAQ-femto's package as a
 developer:
 

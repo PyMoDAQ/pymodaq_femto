@@ -32,8 +32,8 @@ copyright = u'%d, Weber Sébastien' % year
 author = 'Weber Sebastien'
 
 # 'releases' (changelog) settings
-releases_issue_uri = "https://github.com/CEMES-CNRS/pymodaq_femto/issues/%s"
-releases_release_uri = "https://github.com/CEMES-CNRS/pymodaq_femto/tree/%s"
+releases_issue_uri = "https://github.com/PyMoDAQ/pymodaq_femto/issues/%s"
+releases_release_uri = "https://github.com/PyMoDAQ/pymodaq_femto/tree/%s"
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.getcwd(), '..')))
 

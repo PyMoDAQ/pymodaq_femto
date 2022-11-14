@@ -84,7 +84,6 @@ Index
    usage/Features
    usage/Installation
    usage/Simulator
-   usage/Retriever
    usage/Contributors
 
 

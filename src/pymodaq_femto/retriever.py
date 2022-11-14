@@ -938,12 +938,13 @@ class Retriever(QObject):
             QIcon(QPixmap(":/icons/Icon_Library/Save.png")), "Save Data"
         )
 
+        resources_dir = os.path.abspath(os.path.dirname(__file__))+ "\\resources"
         self.save_settings_action = QAction(
-            QIcon(QPixmap("resources/save_settings.png")),
+            QIcon(QPixmap(os.path.join(resources_dir, 'save_settings.png'))),
             "Save current settings",
         )
         self.recall_settings_action = QAction(
-            QIcon(QPixmap("resources/load_settings.png")),
+            QIcon(QPixmap(os.path.join(resources_dir, 'load_settings.png'))),
             "Recall saved settings",
         )
 

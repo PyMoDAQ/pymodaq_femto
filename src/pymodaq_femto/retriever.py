@@ -908,7 +908,7 @@ class Retriever(QObject):
 
         if self.dashboard is not None:
             if self.dashboard.scan_module is not None:
-                self.load_last_scan_action = gutils.QAction(
+                self.load_last_scan_action = QAction(
                     QIcon(QPixmap(":/icons/Icon_Library/Open_2D.png")),
                     "Load last 2D scan",
                 )

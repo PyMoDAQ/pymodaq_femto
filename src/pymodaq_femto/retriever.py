@@ -806,6 +806,8 @@ class Retriever(QObject):
         )
         self.prop_settings.sigTreeStateChanged.connect(self.prop_settings_changed)
 
+        self.resources_dir = os.path.abspath(os.path.dirname(__file__)) + "\\resources"
+
         self.setupUI()
         self.create_menu(self.mainwindow.menuBar())
         self.simulator = None
@@ -938,13 +940,13 @@ class Retriever(QObject):
             QIcon(QPixmap(":/icons/Icon_Library/Save.png")), "Save Data"
         )
 
-        resources_dir = os.path.abspath(os.path.dirname(__file__))+ "\\resources"
+
         self.save_settings_action = QAction(
-            QIcon(QPixmap(os.path.join(resources_dir, 'save_settings.png'))),
+            QIcon(QPixmap(os.path.join(self.resources_dir, 'save_settings.png'))),
             "Save current settings",
         )
         self.recall_settings_action = QAction(
-            QIcon(QPixmap(os.path.join(resources_dir, 'load_settings.png'))),
+            QIcon(QPixmap(os.path.join(self.resources_dir, 'load_settings.png'))),
             "Recall saved settings",
         )
 
@@ -2097,7 +2099,7 @@ class Retriever(QObject):
         h5saver.close_file()
 
     def save_settings_to_file(self):
-        path_to_file = 'resources/retriever_settings.h5'
+        path_to_file = os.path.join(self.resources_dir, 'retriever_settings.h5')
 
         msg = QtWidgets.QMessageBox()
         msg.setWindowTitle('Save settings to file')
@@ -2112,10 +2114,10 @@ class Retriever(QObject):
         answer = msg.exec_()
 
         if answer == QtWidgets.QMessageBox.Save:
-            self.save_data('resources/retriever_settings.h5')
+            self.save_data(path_to_file)
 
     def recall_settings_from_file(self):
-        path_to_file = 'resources/retriever_settings.h5'
+        path_to_file = os.path.join(self.resources_dir, 'retriever_settings.h5')
 
         if not os.path.exists(path_to_file):
             popup_message("Error", "Did not find a file with saved settings.")

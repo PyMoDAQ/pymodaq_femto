@@ -38,6 +38,7 @@ import scipy
 import importlib
 from scipy.fftpack import next_fast_len
 from pymodaq.daq_utils.h5modules import H5BrowserUtil, H5Saver
+from pymodaq.daq_utils.h5utils import get_h5_data_from_node
 from pyqtgraph.graphicsItems.GradientEditorItem import Gradients
 from pymodaq_femto import _PNPS_CLASSES
 from pypret.retrieval.retriever import _RETRIEVER_CLASSES
@@ -893,7 +894,7 @@ class Retriever(QObject):
         )
 
         self.ui.dock_propagation = Dock("Propagation")
-        self.dockarea.addDock(self.ui.dock_propagation, "below", self.ui.dock_retriever)
+        self.dockarea.addDock(self.ui.dock_propagation, "below", self.ui.dock_retrieved_data)
 
         self.ui.dock_processed.raiseDock()
 
@@ -1374,7 +1375,8 @@ class Retriever(QObject):
             )
             if fname != "":
                 h5file = self.h5browse.open_file(fname)
-                data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
+                node = self.h5browse.get_node(node_path)
+                data, axes, nav_axes, is_spread = get_h5_data_from_node(node)
                 self.h5browse.close_file()
             else:
                 return
@@ -1426,7 +1428,8 @@ class Retriever(QObject):
         try:
             if fname is not None and node_path is not None:
                 h5file = self.h5browse.open_file(fname)
-                data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
+                node = self.h5browse.get_node(node_path)
+                data, axes, nav_axes, is_spread = get_h5_data_from_node(node)
                 self.h5browse.close_file()
             else:
                 data, fname, node_path = browse_data(
@@ -1469,7 +1472,8 @@ class Retriever(QObject):
 
     def get_axes_from_trace_node(self, fname, node_path):
         h5file = self.h5browse.open_file(fname)
-        data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
+        node = self.h5browse.get_node(node_path)
+        data, axes, nav_axes, is_spread = get_h5_data_from_node(node)
         self.h5browse.close_file()
         return axes["x_axis"], axes["nav_00"]
 

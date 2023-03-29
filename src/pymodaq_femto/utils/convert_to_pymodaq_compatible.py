@@ -10,7 +10,7 @@ from pymodaq.daq_utils.h5modules import H5SaverBase
 import os
 
 
-class DScanCustomSaver(H5SaverBase):
+class PyMoDAQFemtoCustomSaver(H5SaverBase):
     def add_exp_trace(self, node, trace, wl, label="Wavelength", units="m"):
         traceToSave = dict(data=trace, x_axis=dict(data=wl, label=label, units=units))
         det = self.get_set_group(node, "DSCAN_Measurement", title='DScan')
@@ -18,8 +18,8 @@ class DScanCustomSaver(H5SaverBase):
         # det = self.add_det_group(node, title='DScan')
         self.add_data(det, traceToSave, title='DScan trace')
 
-    def add_exp_insertion(self, node, insertion, label="Insertion", units="m"):
-        ax = self.add_navigation_axis(insertion, node, axis='x_axis', title=label)
+    def add_exp_parameter(self, node, parameter, label="Parameter", units="p.u."):
+        ax = self.add_navigation_axis(parameter, node, axis='x_axis', title=label)
         self.set_attr(ax, "label", label)
         self.set_attr(ax, "units", units)
         self.set_attr(ax, "nav_index", 0)
@@ -33,10 +33,10 @@ class DScanCustomSaver(H5SaverBase):
 
 if __name__ == '__main__':
     from pathlib import Path
-    saver = DScanCustomSaver()
+    saver = PyMoDAQFemtoCustomSaver()
 
     # # One particular implementation of saved data
-    path_root = Path(__file__).parent.parent.parent.parent
+    path_root = Path(__file__).parent
     pathToLoad = path_root.joinpath("raw_scans/")
     pathToSave = path_root.joinpath("converted_scans/")
     if not pathToSave.is_dir():
@@ -65,7 +65,7 @@ if __name__ == '__main__':
     scannode.set_attr('scan_type', "Scan1D")
 
     # Add all data
-    saver.add_exp_insertion(scannode, parameter_axis)
+    saver.add_exp_parameter(scannode, parameter_axis, label='Insertion', units='m')
     saver.add_exp_trace(scannode, trace_data, spectrum_trace_axis)
     saver.add_exp_fundamental(scannode, spectrum_fundamental_intensity, spectrum_fundamental_axis_wavelength)
     saver.close_file()

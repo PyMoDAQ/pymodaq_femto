@@ -17,24 +17,23 @@ Retriever
 ---------
 
 * Sébastien Weber, Research Engineer at CEMES/CNRS
+* Romain Géneaux, Researcher at CEA Saclay, LIDYL
 
 Propagator
----------
-
-* Romain Géneaux, Researcher at CEA Saclay, Lidyl
+-----------
+* Romain Géneaux, Researcher at CEA Saclay, LIDYL
 
 Cleaning
 --------
 
 * Sébastien Weber, Research Engineer at CEMES/CNRS
-* Romain Géneaux, Researcher at CEA Saclay, Lidyl
+* Romain Géneaux, Researcher at CEA Saclay, LIDYL
 
 
 Documentation
 *************
 
-* Sébastien Weber, Research Engineer at CEMES/CNRS
-* Romain Géneaux, Researcher at CEA Saclay, Lidyl
+* Romain Géneaux, Researcher at CEA Saclay, LIDYL
 
 You want to contribute?
 ***********************

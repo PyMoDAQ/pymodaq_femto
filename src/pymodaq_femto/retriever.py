@@ -30,7 +30,7 @@ from pymodaq_femto.graphics import (
     PulsePlot,
     PulsePropagationPlot,
 )
-from pymodaq_femto.simulation import Simulator, methods, nlprocesses, materials
+from pymodaq_femto.simulator import Simulator, methods, nlprocesses, materials
 from collections import OrderedDict
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
 from pypret.frequencies import om2wl, wl2om, convert

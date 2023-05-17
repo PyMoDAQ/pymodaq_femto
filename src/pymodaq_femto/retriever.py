@@ -2004,21 +2004,24 @@ class Retriever(QObject):
     def load_last_scan(self):
         try:
             viewer = self.dashboard.scan_module.ui.scan2D_graph
-            parameter_axis = utils.Axis(
-                data=viewer.x_axis_scaled.copy(),
-                label=viewer.scaling_options["scaled_xaxis"]["label"],
-                units=viewer.scaling_options["scaled_xaxis"]["units"],
-            )
-            wl = utils.Axis(
-                data=viewer.y_axis_scaled.copy(),
-                label=viewer.scaling_options["scaled_yaxis"]["label"],
-                units=viewer.scaling_options["scaled_yaxis"]["units"],
-            )
+
             data = self.dashboard.scan_module.scan_data_2D[0].T.copy()
 
+            parameter_axis = utils.Axis(
+                data=viewer.x_axis.axis_data(data.shape[0]),
+                label=viewer.x_axis.axis_label,
+                units=viewer.x_axis.axis_units
+            )
+            wl = utils.Axis(
+                data=viewer.y_axis.axis_data(data.shape[1]),
+                label=viewer.y_axis.axis_label,
+                units=viewer.y_axis.axis_units
+            )
+
             self.set_data_in_exp(data, wl, parameter_axis)
+
         except Exception as e:
-            pass
+            logger.exception(str(e))
 
     def save_data(self, save_file_pathname=None):
         try:
@@ -2098,7 +2101,7 @@ class Retriever(QObject):
             h5saver.set_attr(h5saver.raw_group, "settings", settings_str)
 
         except Exception as e:
-            pass
+            logger.exception(str(e))
 
         h5saver.close_file()
 

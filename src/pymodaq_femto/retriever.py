@@ -30,7 +30,7 @@ from pymodaq_femto.graphics import (
     PulsePlot,
     PulsePropagationPlot,
 )
-from pymodaq_femto.simulation import Simulator, methods, nlprocesses, materials
+from pymodaq_femto.simulator import Simulator, methods, nlprocesses, materials
 from collections import OrderedDict
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
 from pypret.frequencies import om2wl, wl2om, convert
@@ -38,6 +38,7 @@ import scipy
 import importlib
 from scipy.fftpack import next_fast_len
 from pymodaq.daq_utils.h5modules import H5BrowserUtil, H5Saver
+from pymodaq.daq_utils.h5utils import get_h5_data_from_node
 from pyqtgraph.graphicsItems.GradientEditorItem import Gradients
 from pymodaq_femto import _PNPS_CLASSES
 from pypret.retrieval.retriever import _RETRIEVER_CLASSES
@@ -893,7 +894,7 @@ class Retriever(QObject):
         )
 
         self.ui.dock_propagation = Dock("Propagation")
-        self.dockarea.addDock(self.ui.dock_propagation, "below", self.ui.dock_retriever)
+        self.dockarea.addDock(self.ui.dock_propagation, "below", self.ui.dock_retrieved_data)
 
         self.ui.dock_processed.raiseDock()
 
@@ -1374,7 +1375,8 @@ class Retriever(QObject):
             )
             if fname != "":
                 h5file = self.h5browse.open_file(fname)
-                data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
+                node = self.h5browse.get_node(node_path)
+                data, axes, nav_axes, is_spread = get_h5_data_from_node(node)
                 self.h5browse.close_file()
             else:
                 return
@@ -1426,7 +1428,8 @@ class Retriever(QObject):
         try:
             if fname is not None and node_path is not None:
                 h5file = self.h5browse.open_file(fname)
-                data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
+                node = self.h5browse.get_node(node_path)
+                data, axes, nav_axes, is_spread = get_h5_data_from_node(node)
                 self.h5browse.close_file()
             else:
                 data, fname, node_path = browse_data(
@@ -1469,7 +1472,8 @@ class Retriever(QObject):
 
     def get_axes_from_trace_node(self, fname, node_path):
         h5file = self.h5browse.open_file(fname)
-        data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
+        node = self.h5browse.get_node(node_path)
+        data, axes, nav_axes, is_spread = get_h5_data_from_node(node)
         self.h5browse.close_file()
         return axes["x_axis"], axes["nav_00"]
 
@@ -2000,21 +2004,24 @@ class Retriever(QObject):
     def load_last_scan(self):
         try:
             viewer = self.dashboard.scan_module.ui.scan2D_graph
-            parameter_axis = utils.Axis(
-                data=viewer.x_axis_scaled.copy(),
-                label=viewer.scaling_options["scaled_xaxis"]["label"],
-                units=viewer.scaling_options["scaled_xaxis"]["units"],
-            )
-            wl = utils.Axis(
-                data=viewer.y_axis_scaled.copy(),
-                label=viewer.scaling_options["scaled_yaxis"]["label"],
-                units=viewer.scaling_options["scaled_yaxis"]["units"],
-            )
+
             data = self.dashboard.scan_module.scan_data_2D[0].T.copy()
 
+            parameter_axis = utils.Axis(
+                data=viewer.x_axis.axis_data(data.shape[0]),
+                label=viewer.x_axis.axis_label,
+                units=viewer.x_axis.axis_units
+            )
+            wl = utils.Axis(
+                data=viewer.y_axis.axis_data(data.shape[1]),
+                label=viewer.y_axis.axis_label,
+                units=viewer.y_axis.axis_units
+            )
+
             self.set_data_in_exp(data, wl, parameter_axis)
+
         except Exception as e:
-            pass
+            logger.exception(str(e))
 
     def save_data(self, save_file_pathname=None):
         try:
@@ -2094,7 +2101,7 @@ class Retriever(QObject):
             h5saver.set_attr(h5saver.raw_group, "settings", settings_str)
 
         except Exception as e:
-            pass
+            logger.exception(str(e))
 
         h5saver.close_file()
 

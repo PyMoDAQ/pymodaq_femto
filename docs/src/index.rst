@@ -78,12 +78,14 @@ Index
 *****
 
 .. toctree::
+   :numbered:
    :maxdepth: 6
    :caption: Contents:
 
    usage/Features
    usage/Installation
    usage/Simulator
+   usage/Retriever
    usage/Contributors
 
 

@@ -2123,8 +2123,8 @@ class Retriever(QObject):
             popup_message("Error", "Did not find a file with saved settings.")
         else:
             h5file = self.h5browse.open_file(path_to_file)
-            fund_data, fund_axes, fund_nav_axes, is_spread = self.h5browse.get_h5_data('/PyMoDAQFemtoAnalysis/DataIn/FunSpectrum/Data')
-            trace_data, trace_axes, trace_nav_axes, is_spread = self.h5browse.get_h5_data('/PyMoDAQFemtoAnalysis/DataIn/NLTrace/Data')
+            fund_data, fund_axes, fund_nav_axes, is_spread = get_h5_data_from_node('/PyMoDAQFemtoAnalysis/DataIn/FunSpectrum/Data')
+            trace_data, trace_axes, trace_nav_axes, is_spread = get_h5_data_from_node('/PyMoDAQFemtoAnalysis/DataIn/NLTrace/Data')
             attr_dict, settings, scan_settings, pixmaps = self.h5browse.get_h5_attributes('/PyMoDAQFemtoAnalysis')
             self.h5browse.close_file()
 

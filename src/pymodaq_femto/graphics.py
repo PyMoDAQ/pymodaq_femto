@@ -158,20 +158,20 @@ class PulsePropagationPlot(PulsePlot):
 
         # #Add fwhm plot
         if oversampling:
-            t = np.linspace(
+            self.t = np.linspace(
                 self.pulse.t[0], self.pulse.t[-1], self.pulse.N * oversampling
             )
         else:
-            t = self.fundamental.t
-        intensity_fwhm = (
+            self.t = self.fundamental.t
+        self.intensity_fwhm = (
             lib.gaussian(
-                t,
-                t[np.argmax(self.tamp)],
+                self.t,
+                self.t[np.argmax(self.tamp)],
                 sigma=0.5 * (self.fwhm * 1e-15) / np.sqrt(2 * np.log(2.0)),
             )
             * self.tamp.max()
         )
-        self.ax1.plot(t, intensity_fwhm, "r--", alpha=0.5)
+        self.ax1.plot(self.t, self.intensity_fwhm, "r--", alpha=0.5)
 
         self.ax1.set_zorder(1)  # default zorder is 0 for ax1 and ax2
         self.ax1.patch.set_visible(False)  # prevents ax1 from hiding ax2

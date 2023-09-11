@@ -773,6 +773,14 @@ class Retriever(QObject):
                     "readonly": True,
                     "tip": "FOD",
                 },
+                {
+                    "title": "Ratio in main pulse (%)",
+                    "name": "ratio",
+                    "type": "float",
+                    "value": 0.0,
+                    "readonly": True,
+                    "tip": "Ratio",
+                },
             ],
         }
     ]
@@ -1988,7 +1996,7 @@ class Retriever(QObject):
         ).value()
 
         self.prop_canvas.figure.clf()
-        PulsePropagationPlot(
+        prop_plot = PulsePropagationPlot(
             self.propagated_pulse,
             phasepoly,
             fwhm=self.pulse_settings.child("pulse_prop", "fwhm_meas").value(),
@@ -1998,6 +2006,10 @@ class Retriever(QObject):
             phase_blanking_threshold=self.prop_settings.child(
                 "materials", "fit_threshold"
             ).value(),
+        )
+
+        self.pulse_settings.child("pulse_prop", "ratio").setValue(
+            prop_plot.intensity_fwhm.sum() / prop_plot.tamp.sum() * 100
         )
         self.prop_canvas.draw()
 
@@ -2052,20 +2064,33 @@ class Retriever(QObject):
                 rr = self.result
                 result_group = h5saver.get_set_group(h5saver.raw_group, "Result")
 
-                spectrum_group = h5saver.get_set_group(result_group, "Spectrum")
+                #Spectrum
+                spectrum_group = h5saver.get_set_group(result_group, "Spectral intensity")
                 h5saver.add_data(
                     spectrum_group,
                     dict(
-                        data=rr.pulse_retrieved,
+                        data=lib.abs2(rr.pulse_retrieved),
                         x_axis=dict(data=rr.pnps.ft.w, label="frequency", units="Hz"),
                     ),
                     scan_type="",
+                    title="Spectral intensity"
                 )
-
+                phase_group = h5saver.get_set_group(result_group, "Spectral phase")
+                h5saver.add_data(
+                    phase_group,
+                    dict(
+                        data=lib.phase(rr.pulse_retrieved),
+                        x_axis=dict(data=rr.pnps.ft.w, label="frequency", units="Hz"),
+                    ),
+                    scan_type="",
+                    title="Spectral phase"
+                )
                 h5saver.set_attr(spectrum_group, "w0", rr.pnps.w0)
                 h5saver.set_attr(spectrum_group, "Npts", rr.pnps.ft.N)
+                h5saver.set_attr(phase_group, "w0", rr.pnps.w0)
+                h5saver.set_attr(phase_group, "Npts", rr.pnps.ft.N)
 
-                trace_group_retrieved = h5saver.get_set_group(result_group, "NLTrace")
+                trace_group_retrieved = h5saver.get_set_group(result_group, "Retrieved NLTrace")
                 trace_retrieved = dict(
                     data=rr.trace_retrieved,
                     x_axis=dict(data=rr.pnps.process_w, label="frequency", units="Hz"),
@@ -2077,14 +2102,49 @@ class Retriever(QObject):
 
             if self.propagated_pulse is not None:
                 propag_group = h5saver.get_set_group(result_group, "Propagation")
+                # Spectrum
+                spectrum_group = h5saver.get_set_group(propag_group, "Spectral intensity")
                 h5saver.add_data(
-                    propag_group,
+                    spectrum_group,
                     dict(
-                        data=self.propagated_pulse.spectrum,
+                        data=self.propagated_pulse.spectral_intensity,
                         x_axis=dict(data=rr.pnps.ft.w, label="frequency", units="Hz"),
                     ),
                     scan_type="",
+                    title="Spectral intensity"
                 )
+                phase_group = h5saver.get_set_group(propag_group, "Spectral phase")
+                h5saver.add_data(
+                    phase_group,
+                    dict(
+                        data=self.propagated_pulse.spectral_phase,
+                        x_axis=dict(data=rr.pnps.ft.w, label="frequency", units="Hz"),
+                    ),
+                    scan_type="",
+                    title="Spectral phase"
+                )
+                # Time
+                time_group = h5saver.get_set_group(propag_group, "Temporal intensity")
+                h5saver.add_data(
+                    time_group,
+                    dict(
+                        data=self.propagated_pulse.intensity,
+                        x_axis=dict(data=self.propagated_pulse.t, label="time", units="s"),
+                    ),
+                    scan_type="",
+                    title="Temporal intensity"
+                )
+                time_phase_group = h5saver.get_set_group(propag_group, "Temporal phase")
+                h5saver.add_data(
+                    time_phase_group,
+                    dict(
+                        data=self.propagated_pulse.phase,
+                        x_axis=dict(data=self.propagated_pulse.t, label="time", units="s"),
+                    ),
+                    scan_type="",
+                    title="Temporal phase"
+                )
+
                 settings_str = b'<prop_settings title="Prop. Settings" type="group">'
                 settings_str += ioxml.parameter_to_xml_string(self.prop_settings)
                 settings_str += ioxml.parameter_to_xml_string(self.pulse_settings)
@@ -2130,9 +2190,9 @@ class Retriever(QObject):
             popup_message("Error", "Did not find a file with saved settings.")
         else:
             h5file = self.h5browse.open_file(path_to_file)
-            fund_data, fund_axes, fund_nav_axes, is_spread = get_h5_data_from_node('/PyMoDAQFemtoAnalysis/DataIn/FunSpectrum/Data')
-            trace_data, trace_axes, trace_nav_axes, is_spread = get_h5_data_from_node('/PyMoDAQFemtoAnalysis/DataIn/NLTrace/Data')
-            attr_dict, settings, scan_settings, pixmaps = self.h5browse.get_h5_attributes('/PyMoDAQFemtoAnalysis')
+            fund_data, fund_axes, fund_nav_axes, is_spread = get_h5_data_from_node(self.h5browse.get_node('/PyMoDAQFemtoAnalysis/DataIn/FunSpectrum/Data'))
+            trace_data, trace_axes, trace_nav_axes, is_spread = get_h5_data_from_node(self.h5browse.get_node('/PyMoDAQFemtoAnalysis/DataIn/NLTrace/Data'))
+            attr_dict, settings, scan_settings, pixmaps = self.h5browse.get_h5_attributes(self.h5browse.get_node('/PyMoDAQFemtoAnalysis'))
             self.h5browse.close_file()
 
             saved_settings = ioxml.XML_string_to_parameter(settings)

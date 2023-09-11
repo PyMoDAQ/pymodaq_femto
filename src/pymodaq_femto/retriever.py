@@ -2125,6 +2125,9 @@ class Retriever(QObject):
                 )
                 # Time
                 time_group = h5saver.get_set_group(propag_group, "Temporal intensity")
+                t = np.linspace(self.propagated_pulse.t[0], self.propagated_pulse.t[-1], self.propagated_pulse.N *
+                                self.prop_settings.child("materials", "prop_oversampling").value())
+                intensity_to_save = np.abs(self.propagated_pulse.field_at(t))**2
                 h5saver.add_data(
                     time_group,
                     dict(

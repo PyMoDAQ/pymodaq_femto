@@ -3,13 +3,14 @@ from qtpy import QtWidgets
 
 from pathlib import Path
 from pyqtgraph.parametertree import Parameter, ParameterTree
-from pymodaq.daq_utils.parameter import pymodaq_ptypes
 from pypret.frequencies import om2wl, wl2om, convert
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData
 
 import numpy as np
-from pymodaq.daq_utils.daq_utils import gauss1D, my_moment, l2w, linspace_step, Axis, normalize
-from pymodaq.daq_utils.array_manipulation import linspace_this_image, crop_vector_to_axis, crop_array_to_axis,\
+from pymodaq.utils.data import Axis
+from pymodaq.utils.math_utils import gauss1D, my_moment, linspace_step, normalize
+from pymodaq.utils.units import l2w
+from pymodaq.utils.array_manipulation import linspace_this_image, crop_vector_to_axis, crop_array_to_axis,\
     linspace_this_vect
 from pypret.material import BK7
 from pymodaq_femto.materials import FS

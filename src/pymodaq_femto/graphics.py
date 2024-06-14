@@ -244,6 +244,7 @@ class RetrievalResultPlot:
         show=True,
         fundamental=None,
         fundamental_wavelength=None,
+        compare_fundamental=True
     ):
         rr = self.retrieval_result
         # reconstruct a pulse from that
@@ -377,7 +378,7 @@ class RetrievalResultPlot:
         )
         lines = [li21, li22]
         labels = ["intensity", "phase"]
-        if fundamental is not None:
+        if fundamental is not None and compare_fundamental:
             (li31,) = ax2.plot(fund_w, fundamental, "r+", ms=4.0, mew=1.0, zorder=0)
             lines.append(li31)
             labels.append("measurement")

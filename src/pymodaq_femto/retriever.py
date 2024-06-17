@@ -808,14 +808,13 @@ class Retriever(QObject):
         self.settings = Parameter.create(
             name="dataIN_settings", type="group", children=self.params_in
         )
-        self.settings.sigTreeStateChanged.connect(self.settings_changed)
+
         self.prop_settings = Parameter.create(
             name="propagation_settings", type="group", children=self.prop_param
         )
         self.pulse_settings = Parameter.create(
             name="pulse_settings", type="group", children=self.pulse_prop
         )
-        self.prop_settings.sigTreeStateChanged.connect(self.prop_settings_changed)
 
         self.resources_dir = os.path.abspath(os.path.dirname(__file__)) + "\\resources"
 
@@ -851,6 +850,9 @@ class Retriever(QObject):
         self.settings.child("retrieving", "propagate").sigActivated.connect(
             self.propagate
         )
+
+        self.settings.sigTreeStateChanged.connect(self.settings_changed)
+        self.prop_settings.sigTreeStateChanged.connect(self.prop_settings_changed)
 
         self.viewer_trace_in.ROI_select_signal.connect(self.update_ROI)
         self.viewer_trace_in.get_action('ROIselect').triggered.connect(self.show_ROI)

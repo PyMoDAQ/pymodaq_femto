@@ -830,6 +830,9 @@ class Retriever(QObject):
         self.propagated_pulse = None
         self.result = None
         self.save_file_pathname = None
+        self.state = []
+        self.fake_fundamental = True
+
         self.settings.child("processing", "process_trace").sigActivated.connect(
             self.process_trace
         )
@@ -856,9 +859,6 @@ class Retriever(QObject):
         self.settings.child("algo", "dscan_parameter").hide()
         self.settings.child("algo", "alpha").hide()
         self.settings.child("algo", "gamma").hide()
-
-        self.state = []
-        self.fake_fundamental = True
 
     #################################
     # GUI Functions

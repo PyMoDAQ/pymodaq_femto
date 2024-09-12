@@ -26,6 +26,7 @@ from pymodaq.utils.parameter import utils as putils, ioxml
 from pymodaq.utils.h5modules.browsing import browse_data
 from pymodaq.utils.plotting.data_viewers.viewer1D import Viewer1D
 from pymodaq.utils.plotting.data_viewers.viewer2D import Viewer2D
+from pymodaq.utils.plotting.utils.plot_utils import RoiInfo
 from pymodaq.utils.managers.action_manager import QAction
 from pymodaq.utils.managers.roi_manager import LinearROI
 from pymodaq.utils.h5modules.browsing import H5BrowserUtil, H5Browser
@@ -33,6 +34,7 @@ from pymodaq.utils.h5modules.saving import H5SaverLowLevel
 from pymodaq.utils.h5modules.data_saving import DataLoader, DataSaverLoader
 from pymodaq.utils.logger import set_logger, get_module_name, get_base_logger
 from pymodaq.utils.config import Config
+
 
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
 from pypret.frequencies import om2wl, wl2om, convert
@@ -711,7 +713,7 @@ class Retriever(QObject):
                     "title": "Plot oversampling",
                     "name": "prop_oversampling",
                     "type": "int",
-                    "value": 4,
+                    "value": 2,
                     "readonly": False,
                 },
                 {
@@ -830,7 +832,7 @@ class Retriever(QObject):
         self.result = None
         self.save_file_pathname = None
         self.state = []
-        self.fake_fundamental = True
+        self.fake_fundamental = False
 
         self.settings.child("processing", "process_trace").sigActivated.connect(
             self.process_trace
@@ -854,7 +856,7 @@ class Retriever(QObject):
         self.settings.sigTreeStateChanged.connect(self.settings_changed)
         self.prop_settings.sigTreeStateChanged.connect(self.prop_settings_changed)
 
-        self.viewer_trace_in.ROI_select_signal.connect(self.update_ROI)
+        self.viewer_trace_in.roi_select_signal.connect(self.update_ROI)
         self.viewer_trace_in.get_action('ROIselect').triggered.connect(self.show_ROI)
 
         self.settings.child("algo", "miips_parameter").hide()
@@ -1164,7 +1166,7 @@ class Retriever(QObject):
                       and "ROIselect" in param.parent().name()):  # to be sure
                     # a param named 'y0' for instance will not collide with the y0 from the ROI
                     try:
-                        self.viewer_trace_in.ROI_select_signal.disconnect(
+                        self.viewer_trace_in.roi_select_signal.disconnect(
                             self.update_ROI
                         )
                     except Exception as e:
@@ -1173,7 +1175,7 @@ class Retriever(QObject):
                         if not self.viewer_trace_in.get_action('ROIselect').isChecked():
                             self.viewer_trace_in.get_action('ROIselect').trigger()
                             QtWidgets.QApplication.processEvents()
-                        self.viewer_trace_in.ROIselect.setPos(
+                        self.viewer_trace_in.view.ROIselect.setPos(
                             self.settings.child(
                                 "processing", "ROIselect", "x0"
                             ).value(),
@@ -1181,7 +1183,7 @@ class Retriever(QObject):
                                 "processing", "ROIselect", "y0"
                             ).value(),
                         )
-                        self.viewer_trace_in.ROIselect.setSize(
+                        self.viewer_trace_in.view.ROIselect.setSize(
                             [
                                 self.settings.child(
                                     "processing", "ROIselect", "width"
@@ -1191,7 +1193,7 @@ class Retriever(QObject):
                                 ).value(),
                             ]
                         )
-                        self.viewer_trace_in.ROI_select_signal.connect(self.update_ROI)
+                        self.viewer_trace_in.roi_select_signal.connect(self.update_ROI)
                     else:
                         if self.viewer_trace_in.get_action('ROIselect').isChecked():
                             self.viewer_trace_in.get_action('ROIselect').trigger()
@@ -1228,7 +1230,7 @@ class Retriever(QObject):
                             * 1e-9
                     )
 
-                    pos_pxl, y = self.viewer_trace_in.unscale_axis(
+                    pos_pxl, y = self.viewer_trace_in.view.unscale_axis(
                         np.array(pos_real), np.array([0, 1])
                     )
                     self.linear_region.setPos(pos_pxl)
@@ -1406,6 +1408,7 @@ class Retriever(QObject):
             )
             self.update_spectrum_info(self.data_in["raw_spectrum"])
             self.display_spectrum_in()
+            self.fake_fundamental = False
 
     def update_spectrum_info(self, raw_spectrum):
         axis_index = raw_spectrum.get_axis_indexes()[0]
@@ -1437,7 +1440,13 @@ class Retriever(QObject):
 
         # We use central wavelength of the trace
         trace_wl = self.get_trace_in().axes[1]
-        wl0 = self.settings["data_in_info", "trace_in_info", "wl0"] * 1e-9
+
+        if self.settings.child("processing", "ROIselect", "crop_trace").value():
+            x0 = self.settings.child("processing", "ROIselect", "x0").value()
+            w = self.settings.child("processing", "ROIselect", "width").value()
+            wl0 = trace_wl[int(x0+w/2)]
+        else:
+            wl0 = self.settings["data_in_info", "trace_in_info", "wl0"] * 1e-9
         wl_fwhm = self.settings["data_in_info", "trace_in_info", "wl_fwhm"] * 1e-9
         nlprocess = self.settings.child("algo", "nlprocess").value()
 
@@ -1513,6 +1522,7 @@ class Retriever(QObject):
         else:
             trace.axes = [parameter_axis, wl]
 
+        trace.data[0] = trace.data[0].astype(float)
         self.data_in.update(
             dict(
                 raw_trace=trace,
@@ -1525,7 +1535,7 @@ class Retriever(QObject):
         self.display_trace_in()
 
         if "trace_loaded" not in self.state:  # We don't clear the ROIs if this is not the first loaded trace
-            self.viewer_trace_in.ROIselect_action.trigger()
+            self.viewer_trace_in.get_action('ROIselect').trigger()
 
     def update_trace_info(self, raw_trace):
         wl_axis = raw_trace.get_axis_from_index(raw_trace.sig_indexes[0])[0].get_data()
@@ -1635,7 +1645,7 @@ class Retriever(QObject):
     #################################
     def show_ROI(self):
         # self.settings.child('processing', 'ROIselect').setOpts(
-        #     visible=self.viewer_trace_in.ROIselect_action.isChecked())
+        #     visible=self.viewer_trace_in.view.ROIselect_action.isChecked())
         if "trace_loaded" in self.state:
             data = self.data_in["raw_trace"].get_data_index()
             axes = [np.arange(0, data.shape[0]), np.arange(0, data.shape[1])]
@@ -1644,40 +1654,40 @@ class Retriever(QObject):
             limits = []
             for index in axes_index:
                 limit = lib.limit(
-                    axes[index], marginals[index], threshold=1e-2, padding=0.25
+                    axes[index], marginals[index].astype(float), threshold=1e-2, padding=0.25
                 )
                 limits.append(limit)
 
-            self.viewer_trace_in.ROIselect.setPos((limits[1][0], limits[0][0]))
-            self.viewer_trace_in.ROIselect.setSize(
-                (limits[1][1] - limits[1][0], limits[0][1] - limits[0][0])
+            self.viewer_trace_in.view.ROIselect.setPos((limits[0][0], limits[1][0]))
+            self.viewer_trace_in.view.ROIselect.setSize(
+                (limits[0][1] - limits[0][0], limits[1][1] - limits[1][0])
             )
 
-            self.linear_region.setPos(limits[1])
+            self.linear_region.setPos(limits[0])
 
-            pos = self.viewer_trace_in.ROIselect.pos()
-            size = self.viewer_trace_in.ROIselect.size()
+            pos = self.viewer_trace_in.view.ROIselect.pos()
+            size = self.viewer_trace_in.view.ROIselect.size()
 
         else:
             pos = (0, 0)
             size = (1, 1)
 
-        self.update_ROI(QtCore.QRectF(pos[0], pos[1], size[0], size[1]))
+        self.update_ROI(RoiInfo(origin=pos, size=size))
 
-    @Slot(QtCore.QRectF)
-    def update_ROI(self, rect=QtCore.QRectF(0, 0, 1, 1)):
-        self.settings.child("processing", "ROIselect", "x0").setValue(int(rect.x()))
-        self.settings.child("processing", "ROIselect", "y0").setValue(int(rect.y()))
+    @Slot(RoiInfo)
+    def update_ROI(self, roi_info):
+        self.settings.child("processing", "ROIselect", "x0").setValue(int(roi_info.origin[1]))
+        self.settings.child("processing", "ROIselect", "y0").setValue(int(roi_info.origin[0]))
         self.settings.child("processing", "ROIselect", "width").setValue(
-            max([1, int(rect.width())])
+            max([1, int(roi_info.size[1])])
         )
         self.settings.child("processing", "ROIselect", "height").setValue(
-            max([1, int(rect.height())])
+            max([1, int(roi_info.size[0])])
         )
 
     def update_linear(self, linear_roi):
         pos = linear_roi.pos()
-        pos_real, y = self.viewer_trace_in.scale_axis(np.array(pos), np.array([0, 1]))
+        pos_real, y = self.viewer_trace_in.view.scale_axis(np.array(pos), np.array([0, 1]))
         pos_real *= 1e9
         self.settings.child("processing", "linearselect", "wl0").setValue(pos_real[0])
         self.settings.child("processing", "linearselect", "wl1").setValue(pos_real[1])
@@ -1696,8 +1706,8 @@ class Retriever(QObject):
     #################################
 
     def process_both(self):
-        self.process_spectrum()
-        self.process_trace()
+        ret = self.process_spectrum()
+        if ret == 'Success': self.process_trace()
 
     def process_spectrum(self):
         if "trace_loaded" not in self.state:
@@ -1714,9 +1724,11 @@ class Retriever(QObject):
             answer = msg.exec_()
 
             if answer == QtWidgets.QMessageBox.Yes:
+                self.fake_fundamental = True
                 self.create_fake_fundamental()
             else:
-                return
+                self.fake_fundamental = False
+                return 'Aborted'
 
         self.ui.dock_processed.raiseDock()
 
@@ -1726,7 +1738,7 @@ class Retriever(QObject):
                 "Error",
                 "Frequency axis only has one point. Please check that i) the correct method and NL process are selected, ii) the grid settings in 'Processing' are correct. In particular, check that 'Time resolution (fs)' makes sense - typically it should be on the order of 1 fs for a standard femtosecond laser pulse.",
             )
-            return
+            return 'Frequency Error'
 
         method = self.settings.child("algo", "method").value()
         nlprocess = self.settings.child("algo", "nlprocess").value()
@@ -1821,6 +1833,8 @@ class Retriever(QObject):
                           "The wavelength axis of the processed spectrum seems to be wrong. Please check that i) the correct method and NL methods are selected, ii) the grid settings in 'Processing' are correct. In particular, check that 'Time resolution (fs)' makes sense - typically it is on the order of 1 fs for a standard femtosecond laser pulse.")
         self.pulse_canvas.draw()
 
+        return 'Success'
+
     def process_trace(self):
         if "trace_loaded" not in self.state:
             popup_message("Error", "Please load a trace first!")
@@ -1871,7 +1885,7 @@ class Retriever(QObject):
             height = self.settings.child("processing", "ROIselect", "height").value()
             xlim_pxls = np.array([x0, x0 + width])
             ylim_pxls = np.array([y0, y0 + height])
-            xlim, ylim = self.viewer_trace_in.scale_axis(xlim_pxls, ylim_pxls)
+            xlim, ylim = self.viewer_trace_in.view.scale_axis(xlim_pxls, ylim_pxls)
             trace_in = preprocess(trace_in, signal_range=(tuple(ylim), tuple(xlim)))
 
         self.data_in["trace_in"] = trace_in
@@ -2000,7 +2014,7 @@ class Retriever(QObject):
         self.viewer_live_lambda.show_data(DataWithAxes('retriever',
                                                        source='calculated',
                                                        data=[self.data_in["pulse_in"].spectral_intensity],
-                                                       axes=[Axis(data=self.data_in["pulse_in"].wl, label="Wavelength",
+                                                       axes=[Axis(data=convert(self.data_in["pulse_in"].w + self.data_in["pulse_in"].w0, "om", "wl"), label="Wavelength",
                                                                   units="m")], ))
 
     @Slot(SimpleNamespace)

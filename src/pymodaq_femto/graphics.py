@@ -158,20 +158,20 @@ class PulsePropagationPlot(PulsePlot):
 
         # #Add fwhm plot
         if oversampling:
-            self.t = np.linspace(
+            t = np.linspace(
                 self.pulse.t[0], self.pulse.t[-1], self.pulse.N * oversampling
             )
         else:
-            self.t = self.fundamental.t
-        self.intensity_fwhm = (
+            t = self.pulse.t
+        intensity_fwhm = (
             lib.gaussian(
-                self.t,
-                self.t[np.argmax(self.tamp)],
+                t,
+                t[np.argmax(self.tamp)],
                 sigma=0.5 * (self.fwhm * 1e-15) / np.sqrt(2 * np.log(2.0)),
             )
             * self.tamp.max()
         )
-        self.ax1.plot(self.t, self.intensity_fwhm, "r--", alpha=0.5)
+        self.ax1.plot(t, intensity_fwhm, "r--", alpha=0.5)
 
         self.ax1.set_zorder(1)  # default zorder is 0 for ax1 and ax2
         self.ax1.patch.set_visible(False)  # prevents ax1 from hiding ax2
@@ -244,7 +244,6 @@ class RetrievalResultPlot:
         show=True,
         fundamental=None,
         fundamental_wavelength=None,
-        compare_fundamental=True
     ):
         rr = self.retrieval_result
         # reconstruct a pulse from that
@@ -378,7 +377,7 @@ class RetrievalResultPlot:
         )
         lines = [li21, li22]
         labels = ["intensity", "phase"]
-        if fundamental is not None and compare_fundamental:
+        if fundamental is not None:
             (li31,) = ax2.plot(fund_w, fundamental, "r+", ms=4.0, mew=1.0, zorder=0)
             lines.append(li31)
             labels.append("measurement")

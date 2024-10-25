@@ -1,6 +1,6 @@
 from pypret.material import BaseMaterial
 import numpy as np
-
+from pypret.frequencies import convert
 
 class SellmeierF1(BaseMaterial):
     """ Defines a dispersive material via a specific Sellmeier equation.
@@ -70,6 +70,18 @@ class RefractiveIndexDotInfo(BaseMaterial):
         return np.sqrt(n2)
 
 
+class PureGDD(BaseMaterial):
+    def k(self, x, unit='om'):
+        w = convert(x, unit, "om")
+        return 1e-30*w*w/2 * 1e3  # 1e3 because real materials are in fs^2/mm
+
+
+class PureTOD(BaseMaterial):
+    def k(self, x, unit='om'):
+        w = convert(x, unit, "om")
+        return 1e-45 * w * w * w / 6 * 1e3   # 1e3 because real materials are in fs^3/mm
+
+
 # Fused Silica dispersion with extended spectral range
 FS = SellmeierF1(
     coefficients=[
@@ -133,3 +145,9 @@ ADP = RefractiveIndexDotInfo(
     name="ADP",
     long_name="Ammonium dihydrogen phosphate",
 )
+
+# Pure GDD
+GDD = PureGDD(coefficients=[], freq_range=[0,1], name="GDD", long_name="Pure GDD")
+
+# Pure TOD
+TOD = PureTOD(coefficients=[], freq_range=[0,1], name="TOD", long_name="Pure TOD")

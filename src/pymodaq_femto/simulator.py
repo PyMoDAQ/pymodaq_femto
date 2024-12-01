@@ -9,15 +9,13 @@ from pypret import FourierTransform, Pulse, PNPS, lib, MeshData
 
 import numpy as np
 from pymodaq.daq_utils.daq_utils import gauss1D, my_moment, l2w, linspace_step, Axis, normalize
-from pymodaq.daq_utils.array_manipulation import linspace_this_image, crop_vector_to_axis, crop_array_to_axis,\
+from pymodaq.daq_utils.array_manipulation import linspace_this_image, crop_vector_to_axis, crop_array_to_axis, \
     linspace_this_vect
 from pypret.material import BK7
 from pymodaq_femto.materials import FS
 from pymodaq_femto.graphics import MplCanvas, NavigationToolbar, MeshDataPlot, PulsePlot
 from collections import OrderedDict
 from pymodaq_femto import _PNPS_CLASSES
-
-
 
 methods_tmp = list(_PNPS_CLASSES.keys())
 methods_tmp.sort()
@@ -27,104 +25,113 @@ nlprocesses = list(_PNPS_CLASSES[methods[0]].keys())
 materials = OrderedDict(FS=FS, BK7=BK7)
 
 
+def dscan_removed_message():
+    msg = QtWidgets.QMessageBox()
+    msg.setWindowTitle("DSCAN is unavailable")
+    msg.setText("Unfortunately, the DSCAN method has been removed from the public version of "
+                "this code due to legal threats from a patent holder.")
+    msg.setIcon(QtWidgets.QMessageBox.Warning)
+    msg.exec_()
+
+
 class Simulator(QObject):
     params = [
-            {'title': 'Show Pulse', 'name': 'show_pulse', 'type': 'action', 'visible': False},
-            {'title': 'Show Trace', 'name': 'show_trace', 'type': 'action', 'visible': False},
-            {'title': 'Show both', 'name': 'show_plots', 'type': 'action', 'visible': False},
-            {'title': 'Pulse Source:', 'name': 'pulse_source', 'type': 'list', 'limits': ['Simulated', 'From File'],
+        {'title': 'Show Pulse', 'name': 'show_pulse', 'type': 'action', 'visible': False},
+        {'title': 'Show Trace', 'name': 'show_trace', 'type': 'action', 'visible': False},
+        {'title': 'Show both', 'name': 'show_plots', 'type': 'action', 'visible': False},
+        {'title': 'Pulse Source:', 'name': 'pulse_source', 'type': 'list', 'limits': ['Simulated', 'From File'],
+         },
+
+        {'title': 'Pulse Settings:', 'name': 'pulse_settings', 'type': 'group', 'children': [
+            {'title': 'FWHM (fs):', 'name': 'fwhm_time', 'type': 'float', 'value': 5,
+             'tip': 'Fourier Limited Pulse duration in femtoseconds'},
+            {'title': 'Shaping type:', 'name': 'shaping_type', 'type': 'list', 'limits': ['Taylor', 'Gaussian'],
              },
+            {'title': 'Npulses:', 'name': 'npulses', 'type': 'int', 'value': 1,
+             'tip': 'Number of pulse in a sequence'},
+            {'title': 'Pulses separation:', 'name': 'delay_pulses', 'type': 'float', 'value': 100,
+             'tip': 'Delay between pulses in femtosecond', 'visible': False},
+            {'title': 'Taylor Phase:', 'name': 'taylor_phase', 'type': 'group', 'children': [
+                {'title': 'Delay (fs):', 'name': 'GD', 'type': 'float', 'value': 0,
+                 'tip': 'Group Delay in femtosecond'},
+                {'title': 'GDD (fs2):', 'name': 'GDD', 'type': 'float', 'value': 50,
+                 'tip': 'Group Delay Dispersion in femtosecond square'},
+                {'title': 'TOD (fs3):', 'name': 'TOD', 'type': 'float', 'value': 500,
+                 'tip': 'Third Order Dispersion in femtosecond cube'},
+            ]},
+            {'title': 'Gaussian Phase:', 'name': 'gaussian_phase', 'type': 'group', 'visible': False, 'children': [
+                {'title': 'Amplitude (rad):', 'name': 'gauss_amp', 'type': 'float', 'value': 6,
+                 'tip': 'Amplitude of the gaussian phase in radian'},
+                {'title': 'dt (fs):', 'name': 'dtime', 'type': 'float', 'value': 10,
+                 'tip': 'FWHM (in fs) of the gaussian temporal phase'},
+            ]},
 
-            {'title': 'Pulse Settings:', 'name': 'pulse_settings', 'type': 'group', 'children': [
-                {'title': 'FWHM (fs):', 'name': 'fwhm_time', 'type': 'float', 'value': 5,
-                 'tip': 'Fourier Limited Pulse duration in femtoseconds'},
-                {'title': 'Shaping type:', 'name': 'shaping_type', 'type': 'list', 'limits': ['Taylor', 'Gaussian'],
-                 },
-                {'title': 'Npulses:', 'name': 'npulses', 'type': 'int', 'value': 1,
-                 'tip': 'Number of pulse in a sequence'},
-                {'title': 'Pulses separation:', 'name': 'delay_pulses', 'type': 'float', 'value': 100,
-                 'tip': 'Delay between pulses in femtosecond', 'visible': False},
-                {'title': 'Taylor Phase:', 'name': 'taylor_phase', 'type': 'group', 'children': [
-                    {'title': 'Delay (fs):', 'name': 'GD', 'type': 'float', 'value': 0,
-                     'tip': 'Group Delay in femtosecond'},
-                    {'title': 'GDD (fs2):', 'name': 'GDD', 'type': 'float', 'value': 50,
-                     'tip': 'Group Delay Dispersion in femtosecond square'},
-                    {'title': 'TOD (fs3):', 'name': 'TOD', 'type': 'float', 'value': 500,
-                     'tip': 'Third Order Dispersion in femtosecond cube'},
-                ]},
-                {'title': 'Gaussian Phase:', 'name': 'gaussian_phase', 'type': 'group', 'visible': False, 'children': [
-                    {'title': 'Amplitude (rad):', 'name': 'gauss_amp', 'type': 'float', 'value': 6,
-                     'tip': 'Amplitude of the gaussian phase in radian'},
-                    {'title': 'dt (fs):', 'name': 'dtime', 'type': 'float', 'value': 10,
-                     'tip': 'FWHM (in fs) of the gaussian temporal phase'},
-                ]},
-
-                {'title': 'Data File:', 'name': 'data_file_path', 'type': 'browsepath', 'filetype': True,
-                 'visible': False,
-                 'value': str(Path(__file__).parent.parent.parent.joinpath('data/spectral_data.csv')),
-                 'tip': 'Path to a CSV file containing in columns: wavelength(nm), Normalized Sprectral Intensity and phase'
-                        ' in radians'},
-            ]},
-            {'title': 'Algorithm Options:', 'name': 'algo', 'type': 'group', 'children': [
-                {'title': 'Method:', 'name': 'method', 'type': 'list',
-                 'limits': methods,
-                 'tip': 'Characterization Method'},
-                {'title': 'NL process:', 'name': 'nlprocess', 'type': 'list',
-                 'limits': nlprocesses,
-                 'tip': 'Non Linear process used in the experiment'},
-                {'title': 'Alpha (rad):', 'name': 'alpha', 'type': 'float', 'value': 1,
-                 'tip': 'amplitude of the phase pattern (in rad)', 'visible': False},
-                {'title': 'Gamma (Hz):', 'name': 'gamma', 'type': 'float', 'value': 10,
-                 'tip': 'frequency of the phase pattern (in Hz)', 'visible': False},
-                {'title': 'Material:', 'name': 'material', 'type': 'list',
-                 'limits': list(materials.keys()), 'visible': False,
-                 'tip': 'Material used for the Dscan measurement'},
-                {'title': 'Dscan Parameter Scan:', 'name': 'dscan_parameter', 'type': 'group', 'visible': False,
-                 'children': [
-                     {'title': 'Insertion min (mm):', 'name': 'min', 'type': 'float', 'value': -10.,
-                      'tip': 'Minimum of the scanned parameter in mm'},
-                     {'title': 'Insertion max (mm):', 'name': 'max', 'type': 'float', 'value': 10.,
-                      'tip': 'Minimum of the scanned parameter in mm'},
-                     {'title': 'Insertion step (mm):', 'name': 'step', 'type': 'float', 'value': 0.025,
-                      'tip': 'Step size of the scanned parameter in mm'},
-                 ]},
-                {'title': 'MIIPS Parameter Scan:', 'name': 'miips_parameter', 'type': 'group', 'visible': False,
-                 'children': [
-                     {'title': 'Phase min (rad):', 'name': 'min', 'type': 'float', 'value': 0,
-                      'tip': 'Minimum of the scanned parameter in radians'},
-                     {'title': 'Phase max (rad):', 'name': 'max', 'type': 'float', 'value': 2 * np.pi,
-                      'tip': 'Minimum of the scanned parameter in radian'},
-                     {'title': 'Phase setp (rad):', 'name': 'step', 'type': 'float', 'value': 2 * np.pi / 100,
-                      'tip': 'Step size of the scanned parameter in radians'},
-                 ]},
-            ]},
-            {'title': 'Grid settings:', 'name': 'grid_settings', 'type': 'group', 'children': [
-                {'title': 'lambda0 (nm):', 'name': 'wl0', 'type': 'float', 'value': 750,
-                 'tip': 'Central Wavelength of the Pulse spectrum and frequency grid'},
-                {'title': 'Npoints:', 'name': 'npoints', 'type': 'list', 'limits': [2 ** n for n in range(8, 16)],
-                 'value': 1024,
-                 'tip': 'Number of points for the temporal and Fourier Transform Grid'},
-                {'title': 'Time resolution (fs):', 'name': 'time_resolution', 'type': 'float', 'value': 0.5,
-                 'tip': 'Time spacing between 2 points in the time grid'},
-            ]},
-            {'title': 'Plot settings:', 'name': 'plot_settings', 'type': 'group', 'children': [
-                {'title': 'Units:', 'name': 'units', 'type': 'list', 'limits': ['nm', 'Hz'],
-                 'tip': 'Plot ad a function of the wavelength (in nm) or as a function of the angular frequency (in Hz)'},
-                {'title': 'Autolimits?:', 'name': 'autolimits', 'type': 'bool', 'value': True,
-                 'tip': 'Restrict the data plot to limits given from marginals and threshold'},
-                {'title': 'Set Limits?:', 'name': 'setlimits', 'type': 'bool', 'value': False,
-                 'tip': 'Restrict the data plot to limits given from marginals and threshold'},
-                {'title': 'Autolimits Threshold:', 'name': 'autolim_thresh', 'type': 'float', 'value': 1e-2,
-                 'tip': 'Threshold for the determination of the plotting limits'},
-                {'title': 'Limit min:', 'name': 'limit_min', 'type': 'float', 'value': 500,
-                 'tip': 'Min  value of the frequency axis for plotting (Hz or nm)', 'visible': False},
-                {'title': 'Limit max:', 'name': 'limit_max', 'type': 'float', 'value': 1100,
-                 'tip': 'Max  value of the frequency axis for plotting (Hz or nm)', 'visible': False},
-                {'title': 'Npts:', 'name': 'Npts', 'type': 'list',
-                 'limits': [2 ** n for n in range(8, 16)], 'value': 512,
-                 'tip': 'Number of points to display the frequency axis'},
-            ]},
-        ]
+            {'title': 'Data File:', 'name': 'data_file_path', 'type': 'browsepath', 'filetype': True,
+             'visible': False,
+             'value': str(Path(__file__).parent.parent.parent.joinpath('data/spectral_data.csv')),
+             'tip': 'Path to a CSV file containing in columns: wavelength(nm), Normalized Sprectral Intensity and phase'
+                    ' in radians'},
+        ]},
+        {'title': 'Algorithm Options:', 'name': 'algo', 'type': 'group', 'children': [
+            {'title': 'Method:', 'name': 'method', 'type': 'list',
+             'limits': methods,
+             'tip': 'Characterization Method'},
+            {'title': 'NL process:', 'name': 'nlprocess', 'type': 'list',
+             'limits': nlprocesses,
+             'tip': 'Non Linear process used in the experiment'},
+            {'title': 'Alpha (rad):', 'name': 'alpha', 'type': 'float', 'value': 1,
+             'tip': 'amplitude of the phase pattern (in rad)', 'visible': False},
+            {'title': 'Gamma (Hz):', 'name': 'gamma', 'type': 'float', 'value': 10,
+             'tip': 'frequency of the phase pattern (in Hz)', 'visible': False},
+            {'title': 'Material:', 'name': 'material', 'type': 'list',
+             'limits': list(materials.keys()), 'visible': False,
+             'tip': 'Material used for the Dscan measurement'},
+            {'title': 'Dscan Parameter Scan:', 'name': 'dscan_parameter', 'type': 'group', 'visible': False,
+             'children': [
+                 {'title': 'Insertion min (mm):', 'name': 'min', 'type': 'float', 'value': -10.,
+                  'tip': 'Minimum of the scanned parameter in mm'},
+                 {'title': 'Insertion max (mm):', 'name': 'max', 'type': 'float', 'value': 10.,
+                  'tip': 'Minimum of the scanned parameter in mm'},
+                 {'title': 'Insertion step (mm):', 'name': 'step', 'type': 'float', 'value': 0.025,
+                  'tip': 'Step size of the scanned parameter in mm'},
+             ]},
+            {'title': 'MIIPS Parameter Scan:', 'name': 'miips_parameter', 'type': 'group', 'visible': False,
+             'children': [
+                 {'title': 'Phase min (rad):', 'name': 'min', 'type': 'float', 'value': 0,
+                  'tip': 'Minimum of the scanned parameter in radians'},
+                 {'title': 'Phase max (rad):', 'name': 'max', 'type': 'float', 'value': 2 * np.pi,
+                  'tip': 'Minimum of the scanned parameter in radian'},
+                 {'title': 'Phase setp (rad):', 'name': 'step', 'type': 'float', 'value': 2 * np.pi / 100,
+                  'tip': 'Step size of the scanned parameter in radians'},
+             ]},
+        ]},
+        {'title': 'Grid settings:', 'name': 'grid_settings', 'type': 'group', 'children': [
+            {'title': 'lambda0 (nm):', 'name': 'wl0', 'type': 'float', 'value': 750,
+             'tip': 'Central Wavelength of the Pulse spectrum and frequency grid'},
+            {'title': 'Npoints:', 'name': 'npoints', 'type': 'list', 'limits': [2 ** n for n in range(8, 16)],
+             'value': 1024,
+             'tip': 'Number of points for the temporal and Fourier Transform Grid'},
+            {'title': 'Time resolution (fs):', 'name': 'time_resolution', 'type': 'float', 'value': 0.5,
+             'tip': 'Time spacing between 2 points in the time grid'},
+        ]},
+        {'title': 'Plot settings:', 'name': 'plot_settings', 'type': 'group', 'children': [
+            {'title': 'Units:', 'name': 'units', 'type': 'list', 'limits': ['nm', 'Hz'],
+             'tip': 'Plot ad a function of the wavelength (in nm) or as a function of the angular frequency (in Hz)'},
+            {'title': 'Autolimits?:', 'name': 'autolimits', 'type': 'bool', 'value': True,
+             'tip': 'Restrict the data plot to limits given from marginals and threshold'},
+            {'title': 'Set Limits?:', 'name': 'setlimits', 'type': 'bool', 'value': False,
+             'tip': 'Restrict the data plot to limits given from marginals and threshold'},
+            {'title': 'Autolimits Threshold:', 'name': 'autolim_thresh', 'type': 'float', 'value': 1e-2,
+             'tip': 'Threshold for the determination of the plotting limits'},
+            {'title': 'Limit min:', 'name': 'limit_min', 'type': 'float', 'value': 500,
+             'tip': 'Min  value of the frequency axis for plotting (Hz or nm)', 'visible': False},
+            {'title': 'Limit max:', 'name': 'limit_max', 'type': 'float', 'value': 1100,
+             'tip': 'Max  value of the frequency axis for plotting (Hz or nm)', 'visible': False},
+            {'title': 'Npts:', 'name': 'Npts', 'type': 'list',
+             'limits': [2 ** n for n in range(8, 16)], 'value': 512,
+             'tip': 'Number of points to display the frequency axis'},
+        ]},
+    ]
 
     def __init__(self, parent=None, show_ui=True):
         super().__init__()
@@ -158,9 +165,6 @@ class Simulator(QObject):
         self.update_pulse()
         self.update_pnps()
 
-
-
-
     @property
     def trace(self):
         return self.pnps.trace
@@ -168,7 +172,6 @@ class Simulator(QObject):
     @property
     def parameter(self):
         return self.pnps.parameter
-
 
     def setupUI(self):
         self.settings_tree = ParameterTree()
@@ -238,8 +241,9 @@ class Simulator(QObject):
                         self.settings.child('algo', 'miips_parameter').hide()
 
                     if param.value() == 'dscan':
-                        self.settings.child('algo', 'material').show()
-                        self.settings.child('algo', 'dscan_parameter').show()
+                        dscan_removed_message()
+                        self.settings.child("algo", "method").setValue('frog')
+
                     else:
                         self.settings.child('algo', 'material').hide()
                         self.settings.child('algo', 'dscan_parameter').hide()
@@ -254,7 +258,6 @@ class Simulator(QObject):
 
                 elif param.name() == 'npulses':
                     self.settings.child('pulse_settings', 'delay_pulses').show(param.value() > 1)
-
 
     def set_tight_layout(self, tight=True):
         self.pulse_canvas.figure.set_tight_layout(tight)
@@ -302,21 +305,22 @@ class Simulator(QObject):
             md.autolimit(threshold=threshold)
         elif wl_lim is not None:
             delay_c, wlc, trace_croped = crop_array_to_axis(md.axes[0], md.axes[1], md.data.T,
-                                                   (np.min(md.axes[0]), np.max(md.axes[0]), wl_lim[0], wl_lim[1]))
+                                                            (np.min(md.axes[0]), np.max(md.axes[0]), wl_lim[0],
+                                                             wl_lim[1]))
             wl_lin, data_wl = linspace_this_image(wlc, trace_croped.T, axis=1,
-                                                   Npts=Npts)
+                                                  Npts=Npts)
             md.data = data_wl
             md.axes[1] = wl_lin
             # md.data = trace_croped.T
             # md.axes[1] = wlc
-        return md.data, Axis(data=md.axes[1], label=md.labels[1], units=md.units[1]),\
-               Axis(data=md.axes[0], label=md.labels[0], units=md.units[0])
+        return md.data, Axis(data=md.axes[1], label=md.labels[1], units=md.units[1]), \
+            Axis(data=md.axes[0], label=md.labels[0], units=md.units[0])
 
     def get_trace_wl(self, md, Npts=512):
         wl = l2w(md.axes[1] * 1e-15) * 1e-9
         wl = wl[::-1]
         md.data = md.data[:, ::-1]
-        md.scale(1/wl**2)  # conversion has to be scaled by the Jacobian
+        md.scale(1 / wl ** 2)  # conversion has to be scaled by the Jacobian
         wl_lin, data_wl = linspace_this_image(wl, md.data, axis=1,
                                               Npts=Npts)
 
@@ -345,8 +349,8 @@ class Simulator(QObject):
             else:
                 lims *= 1e15
             delay_c, xc, trace_croped = crop_array_to_axis(md.axes[0], md.axes[1], md.data.T,
-                                                            (np.min(md.axes[0]), np.max(md.axes[0]), lims[0],
-                                                             lims[1]))
+                                                           (np.min(md.axes[0]), np.max(md.axes[0]), lims[0],
+                                                            lims[1]))
             xlin, data_line = linspace_this_image(xc, trace_croped.T, axis=1, Npts=Npts)
             md.data = data_line
             md.axes[1] = xlin
@@ -361,18 +365,14 @@ class Simulator(QObject):
         self.ft = FourierTransform(Nt, dt=dt, w0=wl2om(-wl0 - 300e-9))
 
     def update_pnps(self):
-
         pulse = self.update_pulse()
         method = self.settings.child('algo', 'method').value()
         process = self.settings.child('algo', 'nlprocess').value()
 
         if method == 'dscan':
-            material = materials[self.settings.child('algo', 'material').value()]
-            self.pnps = PNPS(pulse, method, process, material=material)
-            parameter = linspace_step(self.settings.child('algo', 'dscan_parameter', 'min').value(),
-                                      self.settings.child('algo', 'dscan_parameter', 'max').value(),
-                                      self.settings.child('algo', 'dscan_parameter', 'step').value())
-            parameter *= 1e-3
+            dscan_removed_message()
+            return None
+
         elif method == 'miips':
             alpha = self.settings.child('algo', 'alpha').value()
             gamma = self.settings.child('algo', 'gamma').value()
@@ -383,6 +383,7 @@ class Simulator(QObject):
         else:
             self.pnps = PNPS(pulse, method, process)
             parameter = np.linspace(self.ft.t[-1], self.ft.t[0], len(self.ft.t))
+
         self.pnps.calculate(pulse.spectrum, parameter)
         self.max_pnps = np.max(self.pnps.Tmn)
         return self.pnps
@@ -399,16 +400,16 @@ class Simulator(QObject):
             pulse.spectrum = gauss1D(pulse.w, x0=0., dx=domega * 1e15)  # x0=0 because the frequency axis is already
 
             if self.settings.child('pulse_settings', 'shaping_type').value() == 'Taylor':
-                GD = self.settings.child('pulse_settings', 'taylor_phase','GD').value()
+                GD = self.settings.child('pulse_settings', 'taylor_phase', 'GD').value()
                 GDD = self.settings.child('pulse_settings', 'taylor_phase', 'GDD').value()
                 TOD = self.settings.child('pulse_settings', 'taylor_phase', 'TOD').value()
-                phase = GD * 1e-15 * pulse.w +\
-                        GDD * 1e-30 * pulse.w ** 2 / 2 +\
+                phase = GD * 1e-15 * pulse.w + \
+                        GDD * 1e-30 * pulse.w ** 2 / 2 + \
                         TOD * 1e-45 * pulse.w ** 3 / 6
                 pulse.spectrum = pulse.spectrum * np.exp(1j * phase)
             elif self.settings.child('pulse_settings', 'shaping_type').value() == 'Gaussian':
                 amp = self.settings.child('pulse_settings', 'gaussian_phase', 'gauss_amp').value()
-                dtime = self.settings.child('pulse_settings', 'gaussian_phase', 'dtime').value() *1e-15
+                dtime = self.settings.child('pulse_settings', 'gaussian_phase', 'dtime').value() * 1e-15
                 phase = amp * gauss1D(pulse.t, 0, dtime)
                 pulse.field = pulse.field * np.exp(1j * phase)
 
@@ -417,7 +418,8 @@ class Simulator(QObject):
                 delta_t = self.settings.child('pulse_settings', 'delay_pulses').value()
                 spectrum = np.zeros_like(pulse.spectrum)
                 for ind in range(Npulses):
-                    spectrum += 1 / Npulses * pulse.spectrum * np.exp(1j * pulse.w * (-Npulses/2+ind) * delta_t * 1e-15)
+                    spectrum += 1 / Npulses * pulse.spectrum * np.exp(
+                        1j * pulse.w * (-Npulses / 2 + ind) * delta_t * 1e-15)
                 pulse.spectrum = spectrum
 
             # # recenter pulse in time domain

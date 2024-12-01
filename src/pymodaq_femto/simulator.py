@@ -3,14 +3,13 @@ from qtpy import QtWidgets
 
 from pathlib import Path
 from pyqtgraph.parametertree import Parameter, ParameterTree
+from pymodaq.daq_utils.parameter import pymodaq_ptypes
 from pypret.frequencies import om2wl, wl2om, convert
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData
 
 import numpy as np
-from pymodaq.utils.data import Axis
-from pymodaq.utils.math_utils import gauss1D, my_moment, linspace_step, normalize
-from pymodaq.utils.units import l2w
-from pymodaq.utils.array_manipulation import linspace_this_image, crop_vector_to_axis, crop_array_to_axis,\
+from pymodaq.daq_utils.daq_utils import gauss1D, my_moment, l2w, linspace_step, Axis, normalize
+from pymodaq.daq_utils.array_manipulation import linspace_this_image, crop_vector_to_axis, crop_array_to_axis,\
     linspace_this_vect
 from pypret.material import BK7
 from pymodaq_femto.materials import FS
@@ -26,6 +25,15 @@ methods = ['frog']
 methods.extend(methods_tmp)
 nlprocesses = list(_PNPS_CLASSES[methods[0]].keys())
 materials = OrderedDict(FS=FS, BK7=BK7)
+
+
+def dscan_removed_message():
+    msg = QtWidgets.QMessageBox()
+    msg.setWindowTitle("DSCAN is unavailable")
+    msg.setText("Unfortunately, the DSCAN method has been removed from the public version of "
+                "this code due to legal threats from a patent holder.")
+    msg.setIcon(QtWidgets.QMessageBox.Warning)
+    msg.exec_()
 
 
 class Simulator(QObject):
@@ -239,8 +247,9 @@ class Simulator(QObject):
                         self.settings.child('algo', 'miips_parameter').hide()
 
                     if param.value() == 'dscan':
-                        self.settings.child('algo', 'material').show()
-                        self.settings.child('algo', 'dscan_parameter').show()
+                        dscan_removed_message()
+                        self.settings.child("algo", "method").setValue('frog')
+
                     else:
                         self.settings.child('algo', 'material').hide()
                         self.settings.child('algo', 'dscan_parameter').hide()
@@ -362,18 +371,14 @@ class Simulator(QObject):
         self.ft = FourierTransform(Nt, dt=dt, w0=wl2om(-wl0 - 300e-9))
 
     def update_pnps(self):
-
         pulse = self.update_pulse()
         method = self.settings.child('algo', 'method').value()
         process = self.settings.child('algo', 'nlprocess').value()
 
         if method == 'dscan':
-            material = materials[self.settings.child('algo', 'material').value()]
-            self.pnps = PNPS(pulse, method, process, material=material)
-            parameter = linspace_step(self.settings.child('algo', 'dscan_parameter', 'min').value(),
-                                      self.settings.child('algo', 'dscan_parameter', 'max').value(),
-                                      self.settings.child('algo', 'dscan_parameter', 'step').value())
-            parameter *= 1e-3
+            dscan_removed_message()
+            return None
+
         elif method == 'miips':
             alpha = self.settings.child('algo', 'alpha').value()
             gamma = self.settings.child('algo', 'gamma').value()

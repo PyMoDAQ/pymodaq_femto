@@ -3,12 +3,12 @@ from pypret.frequencies import wl2om
 import numpy as np
 
 
-
-
 class DSCAN(CollinearPNPS):
-    """ Implements the dispersion scan method with Fresnel reflection.
-
-    Subclassing d-scan to support fresnel reflection.
+    """
+    UPDATE:
+    Unfortunately, the DSCAN method has been removed from the public version of
+    this code due to legal threats from a patent holder.
+    The implementation of DSCAN has been removed from this class, and instantiating will raise a NotImplementedError.
     """
 
     parameter_name = "insertion"
@@ -40,5 +40,8 @@ class DSCAN(CollinearPNPS):
         if insertion == 0.0:
             return np.ones(self.ft.N, dtype=np.complex128)
         H = np.zeros(self.ft.N, dtype=np.complex128)
-        H[self._mask_valid] = np.exp(1.0j * self._k * insertion)
+
+        raise NotImplementedError("Unfortunately, the DSCAN method has been removed from the public version of"
+                                  "this code due to legal threats from a patent holder.")
+
         return H

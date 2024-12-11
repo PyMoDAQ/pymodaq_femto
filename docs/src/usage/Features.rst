@@ -5,7 +5,7 @@ Overview of PyMoDAQ-Femto
 +++++++++++++++++++++++++
 
 The package implements several retrieval algorithms for ultrashort laser pulse measurement methods, such as as frequency-resolved
-optical gating (FROG), dispersion scan (d-scan), and more. The application can simulate measurement traces from various pulse shapes,
+optical gating (FROG). The application can simulate measurement traces from various pulse shapes,
 and apply retrieval algorithms to them. It also works on real experimental measured traces.
 
 PyMoDAQ-Femto is written in `Python`__ and uses Python 3.7+. It is an extension of the `PyMoDAQ`__ package, which
@@ -31,6 +31,13 @@ __ https://doi.org/10.1364/OPTICA.6.000495
 
 Available methods
 +++++++++++++++++
+.. |ss| raw:: html
+
+    <strike>
+
+.. |se| raw:: html
+
+    </strike>
 
 .. list-table:: Available measurement types that can be simulated or retrieved, with their supported non-linear processes.
    :widths: 25 25 50
@@ -38,13 +45,13 @@ Available methods
 
    * -  Method
      - Full Name
-     - Supported non-linear processes [*]_
+     - Supported non-linear processes [1]_
    * - frog
      - Frequency-resolved optical gating
      - shg, pg, tg
-   * - dscan
-     - Dispersion scan
-     - shg, thg, sd
+   * - |ss| dscan\ |se|
+     - |ss| Dispersion scan\ |se| [2]_
+     - |ss| shg, thg, sd\ |se|
    * - ifrog
      - Interferometric frequency-resolved optical gating
      - shg, thg, sd
@@ -55,4 +62,5 @@ Available methods
      - Time-domain ptychography
      - shg, thg, sd
 
-.. [*] shg: Second Harmonic Generation, thg: Third Harmonic Generation, sd: Self Diffraction, pg: Polarization Gating, tg: Transient Grating
+.. [1] shg: Second Harmonic Generation, thg: Third Harmonic Generation, sd: Self Diffraction, pg: Polarization Gating, tg: Transient Grating
+.. [2] Unfortunately, the DSCAN method has been removed from the public version of this code due to legal threats from a patent holder.

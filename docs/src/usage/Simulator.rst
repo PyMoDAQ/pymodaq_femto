@@ -59,8 +59,16 @@ Description of parameters
  * Data File: ``(type: browsepath)`` Path to the user-supplied file if Pulse Source is set to ``From File``.
 
   .. _algo_settings:
+.. |ss| raw:: html
+
+    <strike>
+
+.. |se| raw:: html
+
+    </strike>
+
 **Algorithm Options:**
- * Method: ``(type: list)`` The type of measurement (FROG, DSCAN, etc.). See :ref:`available_methods` for a full list of available methods.
+ * Method: ``(type: list)`` The type of measurement (FROG, MIIPS, etc.). See :ref:`available_methods` for a full list of available methods.
  * NL process: ``(type: list)`` The non-linear process to use (second harmonic generation, third harmonic generation, etc.). Note that not all processes are compatible with all methods. See :ref:`available_methods` for a full list.
 
  The next available option is the definition of the parameter that is scanned during the measurement. It depends on the chosen method.
@@ -71,7 +79,9 @@ Description of parameters
     * Gamma (Hz): ``(type: float)`` Frequency
     * MIIPS Parameter Scan: ``(type: group)`` Phase minimum, maximum, and step size, in rad.
 
-  DSCAN: The parameter is the amount of material inserted in mm.
+  |ss| DSCAN: The parameter is the amount of material inserted in mm.\ |se|
+   *Unfortunately, the DSCAN method has been removed from the public version of this code due to legal threats from a patent holder.*
+
    * Material: ``(type: list)`` Material inserted. Currently, only Fused Silica (FS) and BK7 are implemented.
    * Dscan Parameter Scan: ``(type: group)`` Insertion minimum, maximum, and step size, in mm.
 

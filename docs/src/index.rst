@@ -6,8 +6,8 @@ into a tool used in several research laboratories.
 
 PyMoDAQ-Femto is a 2-in-1 python application dealing with femtosecond laser pulse characterization. It features:
 
-* A user interface called **Simulator** to define short pulses and simulate the non-linear traces they yield. Most known
-  characterization techniques are available (FROG, D-Scan, ... see :ref:`available_methods`), and several non-linear processes are implemented for each of them.
+* A user interface called **Simulator** to define short pulses and simulate the non-linear traces they yield. Many
+  characterization techniques are available (see :ref:`available_methods`), and several non-linear processes are implemented for each of them.
 
 * A user interface called **Retriever** to run various retrieval algorithms on simulated or experimental traces (acquired using PyMoDAQ or other means)
 

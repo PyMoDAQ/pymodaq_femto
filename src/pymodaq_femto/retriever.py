@@ -1,27 +1,47 @@
 import sys
 import subprocess
 
-import logging
-from pathlib import Path
 import numpy as np
-from types import SimpleNamespace
-import io
-from contextlib import redirect_stdout
-from qtpy import QtGui, QtWidgets, QtCore
-from qtpy.QtCore import Qt, QObject, Slot, QThread, Signal, QLocale
+import warnings
+import math, os
+import inspect
+
+from qtpy import QtWidgets, QtCore
+from qtpy.QtCore import QObject, Slot, QThread, Signal, QLocale
 from qtpy.QtGui import QIcon, QPixmap
 from qtpy.QtGui import QTextCursor
+
+from scipy.fftpack import next_fast_len
+from scipy.interpolate import splrep, BSpline, interp1d
+from collections import OrderedDict
+from types import SimpleNamespace
+from pathlib import Path
+
 from pyqtgraph.dockarea import Dock
 from pyqtgraph.parametertree import Parameter, ParameterTree
-from pymodaq.daq_utils import daq_utils as utils
-from pymodaq.daq_utils import gui_utils as gutils
-from pymodaq.daq_utils.parameter import utils as putils, ioxml
-from pymodaq.daq_utils.h5modules import browse_data
-from pymodaq.daq_utils.plotting.data_viewers.viewer0D import Viewer0D
-from pymodaq.daq_utils.plotting.data_viewers.viewer1D import Viewer1D
-from pymodaq.daq_utils.plotting.data_viewers.viewer2D import Viewer2D
-from pymodaq.daq_utils.managers.action_manager import QAction
-from pymodaq.daq_utils.managers.roi_manager import LinearROI
+
+from pymodaq.utils import daq_utils as utils
+from pymodaq.utils import gui_utils as gutils
+from pymodaq.utils.math_utils import my_moment, linspace_step
+from pymodaq.utils.data import Axis, DataWithAxes
+from pymodaq.utils.parameter import utils as putils, ioxml
+from pymodaq.utils.h5modules.browsing import browse_data
+from pymodaq.utils.plotting.data_viewers.viewer1D import Viewer1D
+from pymodaq.utils.plotting.data_viewers.viewer2D import Viewer2D
+from pymodaq.utils.plotting.utils.plot_utils import RoiInfo
+from pymodaq.utils.managers.action_manager import QAction
+from pymodaq.utils.managers.roi_manager import LinearROI
+from pymodaq.utils.h5modules.browsing import H5BrowserUtil, H5Browser
+from pymodaq.utils.h5modules.saving import H5SaverLowLevel
+from pymodaq.utils.h5modules.data_saving import DataLoader, DataSaverLoader
+from pymodaq.utils.logger import set_logger, get_module_name, get_base_logger
+from pymodaq.utils.config import Config
+
+from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
+from pypret.frequencies import om2wl, wl2om, convert
+from pypret.retrieval.retriever import _RETRIEVER_CLASSES
+
+
 from pymodaq_femto.graphics import (
     RetrievalResultPlot,
     MplCanvas,
@@ -31,26 +51,14 @@ from pymodaq_femto.graphics import (
     PulsePropagationPlot,
 )
 from pymodaq_femto.simulator import Simulator, methods, nlprocesses, materials, dscan_removed_message
-from collections import OrderedDict
-from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
-from pypret.frequencies import om2wl, wl2om, convert
-import scipy
-import importlib
-from scipy.fftpack import next_fast_len
-from pymodaq.daq_utils.h5modules import H5BrowserUtil, H5Saver
-from pymodaq.daq_utils.h5utils import get_h5_data_from_node
-from pyqtgraph.graphicsItems.GradientEditorItem import Gradients
+
 from pymodaq_femto import _PNPS_CLASSES
-from pypret.retrieval.retriever import _RETRIEVER_CLASSES
-import warnings
-import math, os
-import inspect
 import pymodaq_femto.materials
 
 retriever_algos = list(_RETRIEVER_CLASSES.keys())
 
-config = utils.load_config()
-logger = utils.set_logger(utils.get_module_name(__file__))
+config = Config()
+logger = set_logger(get_module_name(__file__))
 
 materials_propagation = []
 for item in inspect.getmembers(pymodaq_femto.materials):
@@ -116,9 +124,7 @@ def pulse_from_spectrum(wavelength, spectrum, pulse=None):
         ft = FourierTransform(N, dw=dw)
         pulse = Pulse(ft, w0, unit="om")
     # interpolate
-    pulse.spectrum = scipy.interpolate.interp1d(
-        w - pulse.w0, spectrum, bounds_error=False, fill_value=0.0
-    )(pulse.w)
+    pulse.spectrum = interp1d(w - pulse.w0, spectrum, bounds_error=False, fill_value=0.0)(pulse.w)
     return pulse
 
 
@@ -172,7 +178,7 @@ def fit_pulse_phase(pulse, phase_blanking_threshold, order):
 
 
 def mask(x, y, where, **kwargs):
-    y = scipy.interpolate.interp1d(x[~where], y[~where], **kwargs)(x)
+    y = interp1d(x[~where], y[~where], **kwargs)(x)
     return y
 
 
@@ -199,10 +205,10 @@ def nonuniform_error_vector(self, Tmn, store=True):
     mean_mu = np.sum(Tmn_meas * Tmn * w2) / np.sum(Tmn * Tmn * w2)
     mu = np.full(self.N, mean_mu)
     mask = (w2.sum(axis=0) > 0.0) & (  # weights equal to zero
-        Tmn_meas.sum(axis=0) > 0.0
+            Tmn_meas.sum(axis=0) > 0.0
     )  # measurement is zero
     mu[mask] = (
-        np.sum(Tmn_meas * Tmn * w2, axis=0)[mask] / np.sum(Tmn * Tmn * w2, axis=0)[mask]
+            np.sum(Tmn_meas * Tmn * w2, axis=0)[mask] / np.sum(Tmn * Tmn * w2, axis=0)[mask]
     )
     # extend the edges of the response function
     idx1 = lib.find(mask, lambda x: x)
@@ -271,10 +277,10 @@ def retrieve_step_fix_spectrum(self, iteration, En):
         # gradient descent w.r.t. Smk
         w2 = self._weights * self._weights
         gradrmk = (
-            -4
-            * ft.dt
-            / (ft.dw * lib.twopi)
-            * ft.backward(rs.mu * ft.forward(pnps.Smk) * (Tmn_meas - rs.mu * Tmn) * w2)
+                -4
+                * ft.dt
+                / (ft.dw * lib.twopi)
+                * ft.backward(rs.mu * ft.forward(pnps.Smk) * (Tmn_meas - rs.mu * Tmn) * w2)
         )
         etar = options.alpha * r / lib.norm2(gradrmk)
         Smk2 = pnps.Smk - etar * gradrmk
@@ -295,6 +301,7 @@ def popup_message(title, text):
     msg.setText(text)
     msg.setIcon(QtWidgets.QMessageBox.Warning)
     msg.exec_()
+
 
 class Retriever(QObject):
     """
@@ -446,13 +453,6 @@ class Retriever(QObject):
                             "tip": "Central Wavelength of the Pulse spectrum and frequency grid",
                         },
                         {
-                            "title": "Time resolution:",
-                            "name": "time_resolution",
-                            "type": "float",
-                            "value": 1.0,
-                            "tip": "Time spacing between 2 points in the time grid",
-                        },
-                        {
                             "title": "Npoints:",
                             "name": "npoints",
                             "type": "list",
@@ -460,7 +460,13 @@ class Retriever(QObject):
                             "value": 1024,
                             "tip": "Number of points for the temporal and Fourier Transform Grid",
                         },
-
+                        {
+                            "title": "Time resolution (fs):",
+                            "name": "time_resolution",
+                            "type": "float",
+                            "value": 1.0,
+                            "tip": "Time spacing between 2 points in the time grid",
+                        },
                     ],
                 },
                 {
@@ -553,7 +559,20 @@ class Retriever(QObject):
                     ],
                 },
                 {
-                    "title": "Process Trace and Spectrum",
+                    "title": "Process Spectrum",
+                    "name": "process_spectrum",
+                    "type": "action",
+                    "tip": "Use ROIs to select frequency areas from the spectrum that should be removed",
+                },
+                {
+                    "title": "Process trace",
+                    "name": "process_trace",
+                    "type": "action",
+                    "tip": "Use one ROI to select a frequency area from the trace in order to remove the background"
+                           " and use ROISelect to reduce the area around the trace",
+                },
+                {
+                    "title": "Process Both",
                     "name": "process_both",
                     "type": "action",
                     "tip": "Process both the trace and the spectrum",
@@ -698,7 +717,7 @@ class Retriever(QObject):
                     "title": "Plot oversampling",
                     "name": "prop_oversampling",
                     "type": "int",
-                    "value": 1,
+                    "value": 2,
                     "readonly": False,
                 },
                 {
@@ -762,6 +781,14 @@ class Retriever(QObject):
                     "readonly": True,
                     "tip": "FOD",
                 },
+                {
+                    "title": "Ratio in main pulse (%)",
+                    "name": "ratio",
+                    "type": "float",
+                    "value": 0.0,
+                    "readonly": True,
+                    "tip": "Ratio",
+                },
             ],
         }
     ]
@@ -778,7 +805,7 @@ class Retriever(QObject):
         logger.info("Initializing Retriever Extension")
         super().__init__()
 
-        self.h5browse = H5BrowserUtil()
+        self.h5utils = H5BrowserUtil()
 
         self.dockarea = dockarea
         self.dashboard = dashboard
@@ -787,14 +814,13 @@ class Retriever(QObject):
         self.settings = Parameter.create(
             name="dataIN_settings", type="group", children=self.params_in
         )
-        self.settings.sigTreeStateChanged.connect(self.settings_changed)
+
         self.prop_settings = Parameter.create(
             name="propagation_settings", type="group", children=self.prop_param
         )
         self.pulse_settings = Parameter.create(
             name="pulse_settings", type="group", children=self.pulse_prop
         )
-        self.prop_settings.sigTreeStateChanged.connect(self.prop_settings_changed)
 
         self.resources_dir = os.path.abspath(os.path.dirname(__file__)) + "\\resources"
 
@@ -809,8 +835,17 @@ class Retriever(QObject):
         self.propagated_pulse = None
         self.result = None
         self.save_file_pathname = None
+        self.state = []
+        self.fake_fundamental = False
+
+        self.settings.child("processing", "process_trace").sigActivated.connect(
+            self.process_trace
+        )
+        self.settings.child("processing", "process_spectrum").sigActivated.connect(
+            self.process_spectrum
+        )
         self.settings.child("processing", "process_both").sigActivated.connect(
-            self.process_data_in
+            self.process_both
         )
         self.settings.child("retrieving", "start").sigActivated.connect(
             self.start_retriever
@@ -822,7 +857,10 @@ class Retriever(QObject):
             self.propagate
         )
 
-        self.viewer_trace_in.ROI_select_signal.connect(self.update_ROI)
+        self.settings.sigTreeStateChanged.connect(self.settings_changed)
+        self.prop_settings.sigTreeStateChanged.connect(self.prop_settings_changed)
+
+        self.viewer_trace_in.roi_select_signal.connect(self.update_ROI)
         self.viewer_trace_in.get_action('ROIselect').triggered.connect(self.show_ROI)
 
         self.settings.child("algo", "miips_parameter").hide()
@@ -830,8 +868,9 @@ class Retriever(QObject):
         self.settings.child("algo", "alpha").hide()
         self.settings.child("algo", "gamma").hide()
 
-        self.state = []
-
+    #################################
+    # GUI Functions
+    #################################
     def create_menu(self, menubar):
         """
             Create the menubar object looking like :
@@ -854,6 +893,7 @@ class Retriever(QObject):
 
         self.io_menu = menubar.addMenu("IO")
         self.io_menu.addAction(self.save_data_action)
+
     def setupUI(self):
         self.ui = QObject()
 
@@ -902,7 +942,6 @@ class Retriever(QObject):
                 self.toolbar.addSeparator()
                 self.load_last_scan_action.triggered.connect(self.load_last_scan)
 
-
         self.load_trace_in_action = QAction(
             QIcon(QPixmap(":/icons/Icon_Library/Open_2D.png")),
             "Load Experimental Trace",
@@ -924,7 +963,6 @@ class Retriever(QObject):
             QIcon(QPixmap(":/icons/Icon_Library/Save.png")), "Save Data"
         )
 
-
         self.save_settings_action = QAction(
             QIcon(QPixmap(os.path.join(self.resources_dir, 'save_settings.png'))),
             "Save current settings",
@@ -934,6 +972,11 @@ class Retriever(QObject):
             "Recall saved settings",
         )
 
+        self.show_log_action = QAction(
+            QIcon(QPixmap(":/icons/Icon_Library/information2.png")),
+            "Show log file",
+        )
+
         self.load_trace_in_action.triggered.connect(self.load_trace_in)
         self.load_spectrum_in_action.triggered.connect(self.load_spectrum_in)
         self.gen_trace_in_action.triggered.connect(self.open_simulator)
@@ -941,6 +984,7 @@ class Retriever(QObject):
         self.save_data_action.triggered.connect(lambda: self.save_data(None))
         self.save_settings_action.triggered.connect(self.save_settings_to_file)
         self.recall_settings_action.triggered.connect(self.recall_settings_from_file)
+        self.show_log_action.triggered.connect(self.show_log)
 
         self.toolbar.addAction(self.load_trace_in_action)
         self.toolbar.addAction(self.load_spectrum_in_action)
@@ -952,18 +996,18 @@ class Retriever(QObject):
         self.toolbar.addSeparator()
         self.toolbar.addAction(self.save_settings_action)
         self.toolbar.addAction(self.recall_settings_action)
-
+        self.toolbar.addSeparator()
+        self.toolbar.addAction(self.show_log_action)
 
         # ######################################################
         #  setup data in dock
 
         data_in_splitter = QtWidgets.QSplitter()
         self.viewer_trace_in = Viewer2D(QtWidgets.QWidget())
-        self.viewer_trace_in.histogrammer.set_gradient(gradient="femto")        # Change default colormap
+        self.viewer_trace_in.set_gradient('red', gradient="femto")  # Change default colormap
 
-        for key in ['red', 'green', 'blue']:        # Hides all RGB controls (not needed for a trace)
+        for key in ['red', 'green', 'blue']:  # Hides all RGB controls (not needed for a trace)
             self.viewer_trace_in.get_action(key).setVisible(False)
-
 
         pos = self.viewer_trace_in.roi_manager.viewer_widget.plotItem.vb.viewRange()[0]
         self.linear_region = LinearROI(index=0, pos=pos)
@@ -1002,8 +1046,8 @@ class Retriever(QObject):
         # setup retriever dock
         retriever_widget = QtWidgets.QSplitter()
         self.viewer_live_trace = Viewer2D(QtWidgets.QWidget())
-        self.viewer_live_trace.histogrammer.set_gradient(gradient="femto_error")
-        for key in ['red', 'green', 'blue']:        # Hides all RGB controls (not needed for a trace)
+        self.viewer_live_trace.set_gradient('red', gradient="femto")
+        for key in ['red', 'green', 'blue']:  # Hides all RGB controls (not needed for a trace)
             self.viewer_trace_in.get_action(key).setVisible(False)
 
         self.viewer_live_time = Viewer1D()
@@ -1088,6 +1132,11 @@ class Retriever(QObject):
 
         self.ui.dock_data_in.raiseDock()
 
+    def show_log(self):
+        """Open the log file in the default text editor"""
+        import webbrowser
+        webbrowser.open(get_base_logger(logger).handlers[0].baseFilename)
+
     def settings_changed(self, param, changes):
         for param, change, data in changes:
             path = self.settings.childPath(param)
@@ -1118,20 +1167,20 @@ class Retriever(QObject):
                     else:
                         self.settings.child("algo", "material").hide()
 
-                elif (param.name() in putils.iter_children( self.settings.child("processing", "ROIselect"), [] )
-                        and "ROIselect" in param.parent().name() ):  # to be sure
+                elif (param.name() in putils.iter_children(self.settings.child("processing", "ROIselect"), [])
+                      and "ROIselect" in param.parent().name()):  # to be sure
                     # a param named 'y0' for instance will not collide with the y0 from the ROI
                     try:
-                        self.viewer_trace_in.ROI_select_signal.disconnect(
+                        self.viewer_trace_in.roi_select_signal.disconnect(
                             self.update_ROI
                         )
                     except Exception as e:
                         pass
-                    if self.settings.child( "processing", "ROIselect", "crop_trace" ).value():
+                    if self.settings.child("processing", "ROIselect", "crop_trace").value():
                         if not self.viewer_trace_in.get_action('ROIselect').isChecked():
                             self.viewer_trace_in.get_action('ROIselect').trigger()
                             QtWidgets.QApplication.processEvents()
-                        self.viewer_trace_in.ROIselect.setPos(
+                        self.viewer_trace_in.view.ROIselect.setPos(
                             self.settings.child(
                                 "processing", "ROIselect", "x0"
                             ).value(),
@@ -1139,7 +1188,7 @@ class Retriever(QObject):
                                 "processing", "ROIselect", "y0"
                             ).value(),
                         )
-                        self.viewer_trace_in.ROIselect.setSize(
+                        self.viewer_trace_in.view.ROIselect.setSize(
                             [
                                 self.settings.child(
                                     "processing", "ROIselect", "width"
@@ -1149,7 +1198,7 @@ class Retriever(QObject):
                                 ).value(),
                             ]
                         )
-                        self.viewer_trace_in.ROI_select_signal.connect(self.update_ROI)
+                        self.viewer_trace_in.roi_select_signal.connect(self.update_ROI)
                     else:
                         if self.viewer_trace_in.get_action('ROIselect').isChecked():
                             self.viewer_trace_in.get_action('ROIselect').trigger()
@@ -1186,7 +1235,7 @@ class Retriever(QObject):
                             * 1e-9
                     )
 
-                    pos_pxl, y = self.viewer_trace_in.unscale_axis(
+                    pos_pxl, y = self.viewer_trace_in.view.unscale_axis(
                         np.array(pos_real), np.array([0, 1])
                     )
                     self.linear_region.setPos(pos_pxl)
@@ -1244,7 +1293,8 @@ class Retriever(QObject):
                 # If spectrum scalings are changed, reload spectrum axis
                 elif param.name() == "wl_scaling" and param.parent().name() == "spectrum_in_info":
                     if "spectrum_loaded" in self.state:
-                        self.load_spectrum_in(fname=self.data_in["spectrum_file_path"], node_path=self.data_in["spectrum_node_path"])
+                        self.load_spectrum_in(fname=self.data_in["spectrum_file_path"],
+                                              node_path=self.data_in["spectrum_node_path"])
 
                 elif param.name() == "guess_type":
                     if param.value() == "Fundamental spectrum":
@@ -1258,39 +1308,282 @@ class Retriever(QObject):
                     else:
                         self.settings.child("retrieving", "fix_spectrum").hide()
 
-    def prop_settings_changed(self, param, changes):
-        for param, change, data in changes:
-            path = self.settings.childPath(param)
-            if change == "childAdded":
-                pass
-            elif change == "parent":
-                pass
-            elif change == "value":
-                if param.name() in [
-                    "material1",
-                    "material2",
-                    "thickness1",
-                    "thickness2",
-                    "prop_oversampling",
-                    "fit_threshold",
-                ]:
-                    self.propagate()
-                elif param.name() == "dt_fwhm":
-                    self.update_fwhm()
+    def restart_fun(self, ask=False):
+        ret = False
+        mssg = QtWidgets.QMessageBox()
+        if ask:
+            mssg.setText(
+                "You have to restart the application to take the modifications into account!"
+            )
+            mssg.setInformativeText("Do you want to restart?")
+            mssg.setStandardButtons(mssg.Ok | mssg.Cancel)
+            ret = mssg.exec()
 
-    def generate_ft_grid(self):
-        wl_center = self.settings.child("processing", "grid_settings", "wl0").value() * 1e-9
-        Npts = self.settings.child("processing", "grid_settings", "npoints").value()
-        dt = (
-                self.settings.child(
-                    "processing", "grid_settings", "time_resolution"
-                ).value()
-                * 1e-15
+        if ret == mssg.Ok or not ask:
+            self.quit_fun()
+            subprocess.call([sys.executable, __file__])
+
+    def quit_fun(self):
+        """
+
+        """
+        try:
+            if hasattr(self, "mainwindow"):
+                self.mainwindow.close()
+
+        except Exception as e:
+            logger.exception(str(e))
+
+    #################################
+    # Experimental data loading
+    #################################
+    def load_spectrum_in(self, fname=None, node_path=None):
+
+        # When spectrum file has already been selected, we reload it
+        if fname is not None and node_path is not None:
+            self.h5utils.open_file(fname, 'r+')
+            dataloader = DataLoader(self.h5utils)
+            spectrum = dataloader.load_data(node_path, with_bkg=True)
+
+        # Otherwise open the dialog box
+        else:
+            spectrum, fname, node_path = browse_data(
+                ret_all=True,
+                message="Select the node corresponding to the" "Fundamental Spectrum",
+            )
+
+        if fname == "" or spectrum is None:  # User pressed cancel
+            return
+
+        else:  # User selected a node
+            if self.data_in is None:
+                self.data_in = DataIn(source="experimental")
+
+            # Wavelength axis
+            scaling_wl = self.settings.child(
+                "data_in_info", "spectrum_in_info", "wl_scaling"
+            ).value()
+
+            nindex = spectrum.get_axis_indexes()
+            if len(nindex) > 1:
+                warnings.warn(
+                    "The axes of the chosen spectrum have more than one dimension, defaulting to the first one.")
+
+            wl_axis = spectrum.get_axis_from_index(nindex[0])[0] * scaling_wl
+
+            # Store DataWithAxis: spectrum
+            #      rescale axis and update labels
+            spectrum.axes = [wl_axis]
+            spectrum.labels = ['Fundamental Spectrum']
+            self.data_in.update(
+                dict(
+                    raw_spectrum=spectrum,
+                    spectrum_file_path=fname,
+                    spectrum_node_path=node_path,
+                )
+            )
+
+            wl_axis_data = wl_axis.get_data().astype("double")
+
+            self.settings.child("processing", "linearselect_spectrum", "wl0_s").setValue(
+                np.min(wl_axis_data * 1e9)
+            )
+            self.settings.child("processing", "linearselect_spectrum", "wl1_s").setValue(
+                np.max(wl_axis_data * 1e9)
+            )
+            self.update_spectrum_info(self.data_in["raw_spectrum"])
+            self.display_spectrum_in()
+            self.fake_fundamental = False
+
+    def update_spectrum_info(self, raw_spectrum):
+        axis_index = raw_spectrum.get_axis_indexes()[0]
+        wl_axis = raw_spectrum.get_axis_from_index(axis_index)[0].get_data()
+        data = raw_spectrum.get_data_index()
+
+        wl0, fwhm = my_moment(wl_axis, data)
+
+        self.settings.child("data_in_info", "spectrum_in_info", "wl0").setValue(
+            wl0 * 1e9
         )
-        dw = np.pi / (0.5 * Npts * dt)
+        self.settings.child("data_in_info", "spectrum_in_info", "wl_fwhm").setValue(
+            fwhm * 1e9
+        )
+        self.settings.child(
+            "data_in_info", "spectrum_in_info", "spectrum_size"
+        ).setValue(len(data))
 
-        self.ft = FourierTransform(Npts, dt, w0=wl2om(wl_center) - np.floor(Npts/2) * dw)
+        self.settings.child("processing", "grid_settings", "wl0").setValue(wl0 * 1e9)
+        self.state.append("spectrum_loaded")
 
+    def display_spectrum_in(self):
+        self.viewer_spectrum_in.show_data(self.data_in["raw_spectrum"])
+
+    def create_fake_fundamental(self):
+        self.fake_fundamental = True
+        if self.data_in is None:
+            self.data_in = DataIn(source="experimental")
+
+        # We use central wavelength of the trace
+        trace_wl = self.get_trace_in().axes[1]
+
+        if self.settings.child("processing", "ROIselect", "crop_trace").value():
+            x0 = self.settings.child("processing", "ROIselect", "x0").value()
+            w = self.settings.child("processing", "ROIselect", "width").value()
+            wl0 = trace_wl[int(x0+w/2)]
+        else:
+            wl0 = self.settings["data_in_info", "trace_in_info", "wl0"] * 1e-9
+        wl_fwhm = self.settings["data_in_info", "trace_in_info", "wl_fwhm"] * 1e-9
+        nlprocess = self.settings.child("algo", "nlprocess").value()
+
+        if "shg" in nlprocess:
+            wlreal = 2 * trace_wl
+            wl0 *= 2
+        elif "thg" in nlprocess:
+            wlreal = 3 * trace_wl
+            wl0 *= 3
+        else:
+            wlreal = trace_wl
+
+        spectrum = DataWithAxes("Fundamental Spectrum", source="calculated",
+                                data=[np.exp(-(wlreal - wl0) ** 2 / (2 * wl_fwhm ** 2))],
+                                axes=[Axis(data=wlreal, label="Wavelength", units="m")])
+
+        self.data_in.update(
+            dict(
+                raw_spectrum=spectrum,
+                spectrum_file_path='',
+                spectrum_node_path='',
+            )
+        )
+        self.update_spectrum_info(self.data_in["raw_spectrum"])
+        self.display_spectrum_in()
+
+    def load_trace_in(self, fname=None, node_path=None):
+        try:
+            # When spectrum file has already been selected, we reload it
+            if fname is not None and node_path is not None:
+                self.h5utils.open_file(fname, 'r+')
+                dataloader = DataLoader(self.h5utils)
+                trace = dataloader.load_data(node_path, with_bkg=True)
+
+            else:
+                trace, fname, node_path = browse_data(
+                    ret_all=True,
+                    message="Select the node corresponding to the"
+                            "Characterization Trace",
+                )
+
+            if fname != "":
+                self.save_file_pathname = fname
+                self.settings.child("data_in_info", "loaded_file").setValue(fname)
+                self.settings.child("data_in_info", "loaded_node").setValue(node_path)
+                self.set_data_in_exp(trace, fname, node_path)
+
+        except Exception as e:
+            logger.exception(str(e))
+
+    def set_data_in_exp(self, trace, fname="", node_path=""):
+        if self.data_in is None:
+            self.data_in = DataIn(source="experimental")
+
+        wl = trace.get_axis_from_index(trace.sig_indexes[0])[0]
+        parameter_axis = trace.get_nav_axes_with_data()[0]
+
+        scaling_parameter = self.settings.child(
+            "data_in_info", "trace_in_info", "param_scaling"
+        ).value()
+        scaling_wl = self.settings.child(
+            "data_in_info", "trace_in_info", "wl_scaling"
+        ).value()
+
+        wl.units = "m"
+        wl.data = wl.get_data() * scaling_wl
+
+        parameter_axis.data = parameter_axis.get_data() * scaling_parameter
+        parameter_axis.units = "p.u."
+
+        if trace.sig_indexes[0] == 0:
+            trace.axes = [wl, parameter_axis]
+        else:
+            trace.axes = [parameter_axis, wl]
+
+        trace.data[0] = trace.data[0].astype(float)
+        self.data_in.update(
+            dict(
+                raw_trace=trace,
+                file_path=fname,
+                node_path=node_path,
+            )
+        )
+
+        self.update_trace_info(self.data_in["raw_trace"])
+        self.display_trace_in()
+
+        if "trace_loaded" not in self.state:  # We don't clear the ROIs if this is not the first loaded trace
+            self.viewer_trace_in.get_action('ROIselect').trigger()
+
+    def update_trace_info(self, raw_trace):
+        wl_axis = raw_trace.get_axis_from_index(raw_trace.sig_indexes[0])[0].get_data()
+        param_axis = raw_trace.get_nav_axes_with_data()[0].get_data()
+        data = raw_trace.get_data_index()
+
+        wl0, fwhm = my_moment(wl_axis, np.sum(data, 0))
+
+        self.settings.child("data_in_info", "trace_in_info", "wl0").setValue(wl0 * 1e9)
+        self.settings.child("data_in_info", "trace_in_info", "wl_fwhm").setValue(
+            fwhm * 1e9
+        )
+
+        self.settings.child("data_in_info", "trace_in_info", "trace_param_size").setValue(len(param_axis))
+        self.settings.child("data_in_info", "trace_in_info", "trace_wl_size").setValue(len(wl_axis))
+
+        self.settings.child("processing", "grid_settings", "npoints").setValue(
+            next_fast_len(len(wl_axis))
+        )
+
+        method = self.settings.child("algo", "method").value()
+        if method in ["dscan", "miips"]:
+            tres = 1  # 1 fs by default
+        else:
+            tres = np.mean(np.diff(param_axis)) * 1e15
+        self.settings.child("processing", "grid_settings", "time_resolution").setValue(tres)
+        self.state.append("trace_loaded")
+
+    def display_trace_in(self):
+        self.ui.dock_data_in.raiseDock()
+        self.viewer_trace_in.show_data(self.data_in['raw_trace'])
+        self.viewer_trace_in.get_action('autolevels').trigger()  # Auto scale colormap
+        for key in ['red', 'green', 'blue']:  # Hides all RGB controls (not needed for a trace)
+            # if not key == 'red': self.viewer_trace_in.get_action(key).trigger()
+            self.viewer_trace_in.get_action(key).setVisible(False)
+        if not self.viewer_trace_in.is_action_checked('histo'):
+            self.viewer_trace_in.get_action('histo').trigger()
+
+    def load_last_scan(self):
+        try:
+            viewer = self.dashboard.scan_module.ui.scan2D_graph
+
+            data = self.dashboard.scan_module.scan_data_2D[0].T.copy()
+
+            parameter_axis = Axis(
+                data=viewer.x_axis.axis_data(data.shape[0]),
+                label=viewer.x_axis.axis_label,
+                units=viewer.x_axis.axis_units
+            )
+            wl = Axis(
+                data=viewer.y_axis.axis_data(data.shape[1]),
+                label=viewer.y_axis.axis_label,
+                units=viewer.y_axis.axis_units
+            )
+
+            self.set_data_in_exp(data, wl, parameter_axis)
+
+        except Exception as e:
+            logger.exception(str(e))
+
+    #################################
+    # Loading from simulator
+    #################################
 
     def open_simulator(self):
         simulator_widget = QtWidgets.QWidget()
@@ -1301,19 +1594,24 @@ class Retriever(QObject):
     def load_from_simulator(self):
         if self.simulator is not None:
             data, axis, parameter_axis = self.simulator.trace_exp(Npts=512)
-            spectrum_axis, spectrum = self.simulator.spectrum_exp(Npts=512)
+            spectrum_axis, spectrum_data = self.simulator.spectrum_exp(Npts=512)
             if self.data_in is None:
                 self.data_in = DataIn(source="simulated")
 
+            axis.index = 1
+            trace = DataWithAxes('simulator_trace', source='calculated', data=[data], axes=[axis, parameter_axis],
+                                 nav_indexes=(0,))
+            spectrum = DataWithAxes('simulator_spectrum', source='calculated', data=[spectrum_data],
+                                    axes=[spectrum_axis])
             self.data_in.update(
                 dict(
                     source="simulated",
-                    raw_spectrum=dict(data=spectrum, x_axis=spectrum_axis),
-                    raw_trace=dict(data=data, x_axis=axis, y_axis=parameter_axis),
-                )
-            )
+                    raw_trace=trace,
+                    raw_spectrum=spectrum,
+                ))
 
-            self.display_data_in()
+            self.display_trace_in()
+            self.display_spectrum_in()
             self.update_spectrum_info(self.data_in["raw_spectrum"])
             self.update_trace_info(self.data_in["raw_trace"])
 
@@ -1327,285 +1625,54 @@ class Retriever(QObject):
                 )
             self.settings.child("data_in_info", "loaded_file").setValue("Simulation")
 
-    def load_spectrum_in(self, fname=None, node_path=None):
-        if fname is not None and node_path is not None:
-            h5file = self.h5browse.open_file(fname)
-            data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
-            self.h5browse.close_file()
-
-        else:
-            data, fname, node_path = browse_data(
-                ret_all=True,
-                message="Select the node corresponding to the" "Fundamental Spectrum",
-            )
-            if fname != "":
-                h5file = self.h5browse.open_file(fname)
-                node = self.h5browse.get_node(node_path)
-                data, axes, nav_axes, is_spread = get_h5_data_from_node(node)
-                self.h5browse.close_file()
-            else:
-                return
-
-        if self.data_in is None:
-            self.data_in = DataIn(source="experimental")
-
-        scaling_wl = self.settings.child(
-            "data_in_info", "spectrum_in_info", "wl_scaling"
-        ).value()
-
-        axes["x_axis"]["data"] *= scaling_wl
-
-        self.data_in.update(
-            dict(
-                raw_spectrum={"data": data.astype("double"), "x_axis": axes["x_axis"]},
-                spectrum_file_path=fname,
-                spectrum_node_path=node_path,
-            )
-        )
-
-        self.settings.child("processing", "linearselect_spectrum", "wl0_s").setValue(
-            np.min(axes["x_axis"]["data"] * 1e9)
-        )
-        self.settings.child("processing", "linearselect_spectrum", "wl1_s").setValue(
-            np.max(axes["x_axis"]["data"] * 1e9)
-        )
-        self.update_spectrum_info(self.data_in["raw_spectrum"])
-        self.display_spectrum_in()
-
-    def update_spectrum_info(self, raw_spectrum):
-        wl0, fwhm = utils.my_moment(
-            raw_spectrum["x_axis"]["data"], raw_spectrum["data"]
-        )
-        self.settings.child("data_in_info", "spectrum_in_info", "wl0").setValue(
-            wl0 * 1e9
-        )
-        self.settings.child("data_in_info", "spectrum_in_info", "wl_fwhm").setValue(
-            fwhm * 1e9
-        )
-        self.settings.child(
-            "data_in_info", "spectrum_in_info", "spectrum_size"
-        ).setValue(len(raw_spectrum["data"]))
-
-        self.settings.child("processing", "grid_settings", "wl0").setValue(wl0 * 1e9)
-        self.state.append("spectrum_loaded")
-
-    def load_trace_in(self, fname=None, node_path=None):
-        try:
-            if fname is not None and node_path is not None:
-                h5file = self.h5browse.open_file(fname)
-                node = self.h5browse.get_node(node_path)
-                data, axes, nav_axes, is_spread = get_h5_data_from_node(node)
-                self.h5browse.close_file()
-            else:
-                data, fname, node_path = browse_data(
-                    ret_all=True,
-                    message="Select the node corresponding to the"
-                            "Characterization Trace",
-                )
-
-            if fname != "":
-                self.save_file_pathname = fname
-                self.settings.child("data_in_info", "loaded_file").setValue(fname)
-                self.settings.child("data_in_info", "loaded_node").setValue(node_path)
-                wl, parameter_axis = self.get_axes_from_trace_node(fname, node_path)
-                self.set_data_in_exp(data, wl, parameter_axis, fname, node_path)
-
-        except Exception as e:
-            logger.exception(str(e))
-
-    def get_trace_in(self):
-        method = self.settings.child("algo", "method").value()
-        if method == "dscan":
-            label = "Insertion"
-            unit = "m"
-        elif method == "miips":
-            label = "Phase"
-            unit = "rad"
-        else:
-            label = "Delay"
-            unit = "s"
-
-        trace_in = MeshData(
-            self.data_in["raw_trace"]["data"],
-            self.data_in["raw_trace"]["y_axis"]["data"],
-            self.data_in["raw_trace"]["x_axis"]["data"],
-            labels=[label, "wavelength"],
-            units=[unit, "m"],
-        )
-        # TODO
-        # ## substract bright spots range (if any)
-        # if len(self.viewer_trace_in.roi_manager.ROIs) > 0:
-        #     roi = [self.viewer_trace_in.roi_manager.ROIs.keys()][0]
-        #     pos = self.viewer_trace_in.roi_manager.ROIs[roi].pos()
-        #     width, height = self.viewer_trace_in.roi_manager.ROIs[roi].size()
-        #     xlim_pxls = np.array([pos.x(), pos.y()+width])
-        #     ylim_pxls = np.array([pos.x(), pos.y() + height])
-        #     xlim, ylim = self.viewer_trace_in.scale_axis(xlim_pxls, ylim_pxls)
-        #     trace_in = preprocess(trace_in, signal_range=None, bright_signal_range=tuple(xlim)) # bright_signal_range doesn't exists yet'
-
-        if self.settings.child("processing", "linearselect", "dosubstract").value():
-            xlim = (np.array((self.settings.child("processing", "linearselect", "wl0").value(),
-                              self.settings.child("processing", "linearselect", "wl1").value()) )* 1e-9)
-            trace_in = preprocess(trace_in, signal_range=None, dark_signal_range=tuple(xlim))
-
-        if self.settings.child("processing", "ROIselect", "crop_trace").value():
-            x0 = self.settings.child("processing", "ROIselect", "x0").value()
-            y0 = self.settings.child("processing", "ROIselect", "y0").value()
-            width = self.settings.child("processing", "ROIselect", "width").value()
-            height = self.settings.child("processing", "ROIselect", "height").value()
-            xlim_pxls = np.array([x0, x0 + width])
-            ylim_pxls = np.array([y0, y0 + height])
-            xlim, ylim = self.viewer_trace_in.scale_axis(xlim_pxls, ylim_pxls)
-            trace_in = preprocess(trace_in, signal_range=(tuple(ylim), tuple(xlim)))
-
-        # Recenter trace in frog
-        if self.settings.child("algo", "method").value() in ['frog', 'ifrog']:
-            t_zero = lib.mean(trace_in.axes[0], lib.abs2(trace_in.marginals(axes=0)))
-            trace_in.axes[0] -= t_zero
-
-        return trace_in
-
-    def get_axes_from_trace_node(self, fname, node_path):
-        h5file = self.h5browse.open_file(fname)
-        node = self.h5browse.get_node(node_path)
-        data, axes, nav_axes, is_spread = get_h5_data_from_node(node)
-        self.h5browse.close_file()
-        return axes["x_axis"], axes["nav_00"]
-
-    def get_pulse_in(self):
-
-        self.data_in["pulse_in"] = pulse_from_spectrum(
-            self.data_in["raw_spectrum"]["x_axis"]["data"],
-            self.data_in["raw_spectrum"]["data"],
-        )
-
-    def update_trace_info(self, raw_trace):
-        wl0, fwhm = utils.my_moment(
-            raw_trace["x_axis"]["data"], np.sum(raw_trace["data"], 0)
-        )
-        self.settings.child("data_in_info", "trace_in_info", "wl0").setValue(wl0 * 1e9)
-        self.settings.child("data_in_info", "trace_in_info", "wl_fwhm").setValue(
-            fwhm * 1e9
-        )
-
-        self.settings.child(
-            "data_in_info", "trace_in_info", "trace_param_size"
-        ).setValue(len(raw_trace["y_axis"]["data"]))
-        self.settings.child("data_in_info", "trace_in_info", "trace_wl_size").setValue(
-            len(raw_trace["x_axis"]["data"])
-        )
-
-        self.settings.child("processing", "grid_settings", "npoints").setValue(
-            next_fast_len(len(raw_trace["x_axis"]["data"]))
-        )
-
-        method = self.settings.child("algo", "method").value()
-        if method in ["dscan", "miips"]:
-            tres = 1        # 1 fs by default
-        else:
-            tres = np.mean(np.diff(raw_trace["y_axis"]["data"])) * 1e15
-        self.settings.child("processing", "grid_settings", "time_resolution").setValue(tres)
-
-        self.state.append("trace_loaded")
-
-    def set_data_in_exp(self, data, wl, parameter_axis, fname="", node_path=""):
-        if self.data_in is None:
-            self.data_in = DataIn(source="experimental")
-
-        scaling_parameter = self.settings.child(
-            "data_in_info", "trace_in_info", "param_scaling"
-        ).value()
-        scaling_wl = self.settings.child(
-            "data_in_info", "trace_in_info", "wl_scaling"
-        ).value()
-
-        wl["units"] = "m"
-        wl["data"] *= scaling_wl
-
-        parameter_axis["data"] *= scaling_parameter
-        parameter_axis["units"] = "p.u."
-
-        self.data_in.update(
-            dict(
-                raw_trace={"data": data, "x_axis": wl, "y_axis": parameter_axis},
-                file_path=fname,
-                node_path=node_path,
-            )
-        )
-
-        self.update_trace_info(self.data_in["raw_trace"])
-        self.display_trace_in()
-
-        if not "trace_loaded" in self.state:   # We dont clear the ROIs if this is not the first loaded trace
-            self.viewer_trace_in.ROIselect_action.trigger()
-
-    def display_trace_in(self):
-        self.viewer_trace_in.setImage(self.data_in["raw_trace"]["data"])
-        self.viewer_trace_in.x_axis = self.data_in["raw_trace"]["x_axis"]
-        self.viewer_trace_in.y_axis = self.data_in["raw_trace"]["y_axis"]
-        self.viewer_trace_in.get_action('autolevels').trigger() # Auto scale colormap
-        for key in ['red', 'green', 'blue']:        # Hides all RGB controls (not needed for a trace)
-            if not key == 'red': self.viewer_trace_in.get_action(key).trigger()
-            self.viewer_trace_in.get_action(key).setVisible(False)
-        if not self.viewer_trace_in.is_action_checked('histo'):
-            self.viewer_trace_in.get_action('histo').trigger()
-
-    def display_spectrum_in(self):
-        self.viewer_spectrum_in.show_data(
-            [self.data_in["raw_spectrum"]["data"]],
-            x_axis=self.data_in["raw_spectrum"]["x_axis"],
-            labels=["Spectrum"],
-        )
-
-    def display_data_in(self):
-        self.display_trace_in()
-        self.display_spectrum_in()
-
+    #################################
+    # ROI on DataIn
+    #################################
     def show_ROI(self):
         # self.settings.child('processing', 'ROIselect').setOpts(
-        #     visible=self.viewer_trace_in.ROIselect_action.isChecked())
+        #     visible=self.viewer_trace_in.view.ROIselect_action.isChecked())
         if "trace_loaded" in self.state:
-            data = self.data_in["raw_trace"]["data"]
+            data = self.data_in["raw_trace"].get_data_index()
             axes = [np.arange(0, data.shape[0]), np.arange(0, data.shape[1])]
             axes_index = list(range(data.ndim))
             marginals = lib.marginals(data)
             limits = []
             for index in axes_index:
                 limit = lib.limit(
-                    axes[index], marginals[index], threshold=1e-2, padding=0.25
+                    axes[index], marginals[index].astype(float), threshold=1e-2, padding=0.25
                 )
                 limits.append(limit)
 
-            self.viewer_trace_in.ROIselect.setPos((limits[1][0], limits[0][0]))
-            self.viewer_trace_in.ROIselect.setSize(
-                (limits[1][1] - limits[1][0], limits[0][1] - limits[0][0])
+            self.viewer_trace_in.view.ROIselect.setPos((limits[0][0], limits[1][0]))
+            self.viewer_trace_in.view.ROIselect.setSize(
+                (limits[0][1] - limits[0][0], limits[1][1] - limits[1][0])
             )
 
-            self.linear_region.setPos(limits[1])
+            self.linear_region.setPos(limits[0])
 
-            pos = self.viewer_trace_in.ROIselect.pos()
-            size = self.viewer_trace_in.ROIselect.size()
+            pos = self.viewer_trace_in.view.ROIselect.pos()
+            size = self.viewer_trace_in.view.ROIselect.size()
 
         else:
-            pos = (0,0)
-            size = (1,1)
+            pos = (0, 0)
+            size = (1, 1)
 
-        self.update_ROI(QtCore.QRectF(pos[0], pos[1], size[0], size[1]))
+        self.update_ROI(RoiInfo(origin=pos, size=size))
 
-    @Slot(QtCore.QRectF)
-    def update_ROI(self, rect=QtCore.QRectF(0, 0, 1, 1)):
-        self.settings.child("processing", "ROIselect", "x0").setValue(int(rect.x()))
-        self.settings.child("processing", "ROIselect", "y0").setValue(int(rect.y()))
+    @Slot(RoiInfo)
+    def update_ROI(self, roi_info):
+        self.settings.child("processing", "ROIselect", "x0").setValue(int(roi_info.origin[1]))
+        self.settings.child("processing", "ROIselect", "y0").setValue(int(roi_info.origin[0]))
         self.settings.child("processing", "ROIselect", "width").setValue(
-            max([1, int(rect.width())])
+            max([1, int(roi_info.size[1])])
         )
         self.settings.child("processing", "ROIselect", "height").setValue(
-            max([1, int(rect.height())])
+            max([1, int(roi_info.size[0])])
         )
 
     def update_linear(self, linear_roi):
         pos = linear_roi.pos()
-        pos_real, y = self.viewer_trace_in.scale_axis(np.array(pos), np.array([0, 1]))
+        pos_real, y = self.viewer_trace_in.view.scale_axis(np.array(pos), np.array([0, 1]))
         pos_real *= 1e9
         self.settings.child("processing", "linearselect", "wl0").setValue(pos_real[0])
         self.settings.child("processing", "linearselect", "wl1").setValue(pos_real[1])
@@ -1619,26 +1686,35 @@ class Retriever(QObject):
             pos[1] * 1e9
         )
 
-    def update_fwhm(self):
-        precision = 1e-15 * self.prop_settings.child("materials", "dt_fwhm").value()
-        try:
-            fwhm = 1e15 * self.propagated_pulse.fwhm(precision)
-            self.pulse_settings.child("pulse_prop", "fwhm_meas").setValue(
-                truncate(fwhm, 4)
-            )
+    #################################
+    # Processing
+    #################################
 
-        except ValueError:
-            warnings.warn("FWHM is undefined.")
-            self.pulse_settings.child("pulse_prop", "fwhm_meas").setValue(0)
+    def process_both(self):
+        ret = self.process_spectrum()
+        if ret == 'Success': self.process_trace()
 
     def process_spectrum(self):
-        if "spectrum_loaded" not in self.state:
-            popup_message("Error", "Please load a spectrum first!")
-            return
-
         if "trace_loaded" not in self.state:
             popup_message("Error", "Please load a trace first!")
             return
+
+        if "spectrum_loaded" not in self.state:
+            msg = QtWidgets.QMessageBox()
+            msg.setWindowTitle('No fundamental spectrum is loaded')
+            msg.setText('Proceed without a fundamental spectrum?')
+            msg.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel)
+            msg.setDefaultButton(QtWidgets.QMessageBox.Yes)
+            msg.setIcon(QtWidgets.QMessageBox.Question)
+            answer = msg.exec_()
+
+            if answer == QtWidgets.QMessageBox.Yes:
+                self.fake_fundamental = True
+                self.create_fake_fundamental()
+            else:
+                self.fake_fundamental = False
+                return 'Aborted'
+
         self.ui.dock_processed.raiseDock()
 
         self.generate_ft_grid()
@@ -1647,13 +1723,13 @@ class Retriever(QObject):
                 "Error",
                 "Frequency axis only has one point. Please check that i) the correct method and NL process are selected, ii) the grid settings in 'Processing' are correct. In particular, check that 'Time resolution (fs)' makes sense - typically it should be on the order of 1 fs for a standard femtosecond laser pulse.",
             )
-            return
+            return 'Frequency Error'
 
         method = self.settings.child("algo", "method").value()
         nlprocess = self.settings.child("algo", "nlprocess").value()
         wl0 = self.settings.child("data_in_info", "trace_in_info", "wl0").value() * 1e-9
-        spectrum = self.data_in["raw_spectrum"]["data"]
-        wavelength = self.data_in["raw_spectrum"]["x_axis"]["data"]
+        spectrum = self.data_in["raw_spectrum"].data
+        wavelength = self.data_in["raw_spectrum"].get_axis_from_index(0)[0].get_data()
 
         if "shg" in nlprocess:
             wl0real = 2 * wl0
@@ -1662,7 +1738,7 @@ class Retriever(QObject):
         else:
             wl0real = wl0
 
-        self.data_in["pulse_in"] = Pulse(self.ft, self.settings.child("processing", "grid_settings", "wl0").value()* 1e-9)
+        self.data_in["pulse_in"] = Pulse(self.ft, wl0real)
 
         for roi in self.viewer_spectrum_in.roi_manager.ROIs:
             range = self.viewer_spectrum_in.roi_manager.ROIs[roi].pos()
@@ -1670,7 +1746,7 @@ class Retriever(QObject):
                 wavelength,
                 spectrum,
                 (range[0] <= wavelength) & (wavelength <= range[1]),
-                )
+            )
 
         if self.settings.child(
                 "processing", "linearselect_spectrum", "dosubstract_spectrum"
@@ -1710,7 +1786,7 @@ class Retriever(QObject):
             self.pnps = PNPS(
                 self.data_in["pulse_in"], method, nlprocess, material=material
             )
-            parameter = utils.linspace_step(
+            parameter = linspace_step(
                 self.settings.child("algo", "dscan_parameter", "min").value(),
                 self.settings.child("algo", "dscan_parameter", "max").value(),
                 self.settings.child("algo", "dscan_parameter", "step").value(),
@@ -1722,7 +1798,7 @@ class Retriever(QObject):
             self.pnps = PNPS(
                 self.data_in["pulse_in"], method, nlprocess, alpha=alpha, gamma=gamma
             )
-            parameter = utils.linspace_step(
+            parameter = linspace_step(
                 self.settings.child("algo", "miips_parameter", "min").value(),
                 self.settings.child("algo", "miips_parameter", "max").value(),
                 self.settings.child("algo", "miips_parameter", "step").value(),
@@ -1734,124 +1810,133 @@ class Retriever(QObject):
         self.pulse_canvas.figure.clf()
 
         try:
-            PulsePlot(self.data_in["pulse_in"], self.pulse_canvas.figure)
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', UserWarning)
+                PulsePlot(self.data_in["pulse_in"], self.pulse_canvas.figure)
         except ValueError:
-            popup_message("Error", "The wavelength axis of the processed spectrum seems to be wrong. Please check that i) the correct method and NL methods are selected, ii) the grid settings in 'Processing' are correct. In particular, check that 'Time resolution (fs)' makes sense - typically it is on the order of 1 fs for a standard femtosecond laser pulse.")
+            popup_message("Error",
+                          "The wavelength axis of the processed spectrum seems to be wrong. Please check that i) the correct method and NL methods are selected, ii) the grid settings in 'Processing' are correct. In particular, check that 'Time resolution (fs)' makes sense - typically it is on the order of 1 fs for a standard femtosecond laser pulse.")
         self.pulse_canvas.draw()
 
+        return 'Success'
 
-    def process_data_in(self):
-        if "spectrum_loaded" not in self.state:
-            popup_message("Error", "Please load a spectrum first!")
-            return
-
+    def process_trace(self):
         if "trace_loaded" not in self.state:
             popup_message("Error", "Please load a trace first!")
             return
+        if "spectrum_processed" not in self.state:
+            popup_message("Error", "Please process the spectrum first")
+            return
         self.ui.dock_processed.raiseDock()
 
-        # Generate FT grid
-        self.generate_ft_grid()
-        if len(np.unique(self.ft.w)) == 1:
-            popup_message(
-                "Error",
-                "Frequency axis only has one point. Please check that i) the correct method and NL process are selected, ii) the grid settings in 'Processing' are correct. In particular, check that 'Time resolution (fs)' makes sense - typically it should be on the order of 1 fs for a standard femtosecond laser pulse.",
-            )
+        if self.pnps is None:
+            logger.info("PNPS is not yet defined, process the spectrum first")
             return
-        method = self.settings.child("algo", "method").value()
-        nlprocess = self.settings.child("algo", "nlprocess").value()
-        wl0 = self.settings.child("data_in_info", "trace_in_info", "wl0").value() * 1e-9
-        spectrum = self.data_in["raw_spectrum"]["data"]
-        wavelength = self.data_in["raw_spectrum"]["x_axis"]["data"]
 
-        self.data_in["trace_in"] = self.get_trace_in()
-        #Check wavelength center of trace
-        wl0, fwhm = utils.my_moment(self.data_in["trace_in"].axes[1], self.data_in["trace_in"].marginals(axes=1))
+        trace_in = self.get_trace_in()
+        # TODO
+        # ## substract bright spots range (if any)
+        # if len(self.viewer_trace_in.roi_manager.ROIs) > 0:
+        #     roi = [self.viewer_trace_in.roi_manager.ROIs.keys()][0]
+        #     pos = self.viewer_trace_in.roi_manager.ROIs[roi].pos()
+        #     width, height = self.viewer_trace_in.roi_manager.ROIs[roi].size()
+        #     xlim_pxls = np.array([pos.x(), pos.y()+width])
+        #     ylim_pxls = np.array([pos.x(), pos.y() + height])
+        #     xlim, ylim = self.viewer_trace_in.scale_axis(xlim_pxls, ylim_pxls)
+        #     trace_in = preprocess(trace_in, signal_range=None, bright_signal_range=tuple(xlim)) # bright_signal_range doesn't exists yet'
 
-        if "shg" in nlprocess:
-            wl0real = 2 * wl0
-        elif "thg" in nlprocess:
-            wl0real = 3 * wl0
-        else:
-            wl0real = wl0
-
-        self.data_in["pulse_in"] = Pulse(self.ft,
-                                         self.settings.child("processing", "grid_settings", "wl0").value() * 1e-9)
-
-        for roi in self.viewer_spectrum_in.roi_manager.ROIs:
-            range = self.viewer_spectrum_in.roi_manager.ROIs[roi].pos()
-            spectrum = mask(
-                wavelength,
-                spectrum,
-                (range[0] <= wavelength) & (wavelength <= range[1]),
-            )
-
-        if self.settings.child(
-                "processing", "linearselect_spectrum", "dosubstract_spectrum"
-        ).value():
-            x1 = (
-                    self.settings.child(
-                        "processing", "linearselect_spectrum", "wl0_s"
-                    ).value()
+        if self.settings.child("processing", "linearselect", "dosubstract").value():
+            xlim = (
+                    np.array(
+                        (
+                            self.settings.child(
+                                "processing", "linearselect", "wl0"
+                            ).value(),
+                            self.settings.child(
+                                "processing", "linearselect", "wl1"
+                            ).value(),
+                        )
+                    )
                     * 1e-9
             )
-            x2 = (
-                    self.settings.child(
-                        "processing", "linearselect_spectrum", "wl1_s"
-                    ).value()
-                    * 1e-9
+            trace_in = preprocess(
+                trace_in, signal_range=None, dark_signal_range=tuple(xlim)
             )
 
-            idx1 = np.argmin(np.abs(wavelength - x1))
-            idx2 = np.argmin(np.abs(wavelength - x2))
+        if self.settings.child("processing", "ROIselect", "crop_trace").value():
+            x0 = self.settings.child("processing", "ROIselect", "x0").value()
+            y0 = self.settings.child("processing", "ROIselect", "y0").value()
+            width = self.settings.child("processing", "ROIselect", "width").value()
+            height = self.settings.child("processing", "ROIselect", "height").value()
+            xlim_pxls = np.array([x0, x0 + width])
+            ylim_pxls = np.array([y0, y0 + height])
+            xlim, ylim = self.viewer_trace_in.view.scale_axis(xlim_pxls, ylim_pxls)
+            trace_in = preprocess(trace_in, signal_range=(tuple(ylim), tuple(xlim)))
 
-            if idx1 > idx2:
-                idx1, idx2 = idx2, idx1
-
-            spectrum -= np.mean(spectrum[idx1:idx2])
-
-        self.data_in["pulse_in"] = pulse_from_spectrum(
-            wavelength, spectrum, pulse=self.data_in["pulse_in"]
-        )
-
-        self.settings.child("data_in_info", "spectrum_in_info", "ftl").setValue(
-            self.data_in["pulse_in"].fwhm(dt=0.1)
-        )
-        # self.pnps = PNPS(self.data_in['pulse_in'], method, nlprocess)
-
-        if method == "dscan":
-            dscan_removed_message()
-
-        elif method == "miips":
-            alpha = self.settings.child("algo", "alpha").value()
-            gamma = self.settings.child("algo", "gamma").value()
-            self.pnps = PNPS(
-                self.data_in["pulse_in"], method, nlprocess, alpha=alpha, gamma=gamma
-            )
-            parameter = utils.linspace_step(
-                self.settings.child("algo", "miips_parameter", "min").value(),
-                self.settings.child("algo", "miips_parameter", "max").value(),
-                self.settings.child("algo", "miips_parameter", "step").value(),
-            )
-        else:
-            self.pnps = PNPS(self.data_in["pulse_in"], method, nlprocess)
-
-        # Interpolate trace on PNPS and draw
+        self.data_in["trace_in"] = trace_in
         preprocess2(self.data_in["trace_in"], self.pnps)
         self.state.append("trace_processed")
 
         self.trace_canvas.figure.clf()
-        MeshDataPlot(self.data_in["trace_in"], self.trace_canvas.figure, limit=True)
+        MeshDataPlot(trace_in, self.trace_canvas.figure, limit=True)
         self.trace_canvas.draw()
 
-        # Plot spectrum
-        self.state.append("spectrum_processed")
-        self.pulse_canvas.figure.clf()
+    def generate_ft_grid(self):
+        wl_center = self.settings.child("processing", "grid_settings", "wl0").value() * 1e-9
+        Npts = self.settings.child("processing", "grid_settings", "npoints").value()
+        dt = (
+                self.settings.child(
+                    "processing", "grid_settings", "time_resolution"
+                ).value()
+                * 1e-15
+        )
+        dw = np.pi / (0.5 * Npts * dt)
+
+        self.ft = FourierTransform(Npts, dt, w0=wl2om(wl_center) - np.floor(Npts / 2) * dw)
+
+    def get_trace_in(self):
+        method = self.settings.child("algo", "method").value()
+        if method == "dscan":
+            label = "Insertion"
+            unit = "m"
+        elif method == "miips":
+            label = "Phase"
+            unit = "rad"
+        else:
+            label = "Delay"
+            unit = "s"
+
+        self.data_in["trace_in"] = MeshData(
+            self.data_in["raw_trace"].get_data_index(),
+            self.data_in["raw_trace"].get_nav_axes_with_data()[0].get_data(),
+            self.data_in["raw_trace"].get_axis_from_index(self.data_in["raw_trace"].sig_indexes[0])[0].get_data(),
+            labels=[label, "wavelength"],
+            units=[unit, "m"],
+        )
+
+        return self.data_in["trace_in"]
+
+    def get_pulse_in(self):
+        self.data_in["pulse_in"] = pulse_from_spectrum(
+            self.data_in["raw_spectrum"].get_axis_from_index(0)[0].get_data(),
+            self.data_in["raw_spectrum"].get_data_index(),
+        )
+
+    def update_fwhm(self):
+        precision = 1e-15 * self.prop_settings.child("materials", "dt_fwhm").value()
         try:
-            PulsePlot(self.data_in["pulse_in"], self.pulse_canvas.figure)
+            fwhm = 1e15 * self.propagated_pulse.fwhm(precision)
+            self.pulse_settings.child("pulse_prop", "fwhm_meas").setValue(
+                truncate(fwhm, 4)
+            )
+
         except ValueError:
-            popup_message("Error", "The wavelength axis of the processed spectrum seems to be wrong. Please check that i) the correct method and NL methods are selected, ii) the grid settings in 'Processing' are correct. In particular, check that 'Time resolution (fs)' makes sense - typically it is on the order of 1 fs for a standard femtosecond laser pulse.")
-        self.pulse_canvas.draw()
+            warnings.warn("FWHM is undefined.")
+            self.pulse_settings.child("pulse_prop", "fwhm_meas").setValue(0)
+
+    #################################
+    # Retriever
+    #################################
 
     def start_retriever(self):
         if "trace_processed" not in self.state:
@@ -1893,42 +1978,29 @@ class Retriever(QObject):
 
     @Slot(list)
     def update_retriever(self, args):
-
-
-        max = 0.8 * np.max([np.abs(np.max(args[0])), np.abs(np.min(args[0]))])
-        self.viewer_live_trace.histogrammer.set_gradient(gradient="femto_error")
-
-        self.viewer_live_trace.setImage(args[0])
+        # max = 0.8 * np.max([np.abs(np.max(args[0])), np.abs(np.min(args[0]))])
+        self.viewer_live_trace.set_gradient('red', gradient="femto")
+        self.viewer_live_trace.show_data(DataWithAxes('retriever',
+                                                      source='calculated',
+                                                      data=[args[0]],
+                                                      axes=[
+                                                          Axis(data=args[1], label="Parameter", units="p.u.", index=0),
+                                                          Axis(data=args[2], label="Frequency", units="Hz", index=1)],
+                                                      nav_indexes=(0,)))
         self.viewer_live_trace.get_action('autolevels').trigger()
-        # for key in ['red', 'green', 'blue']:        # Hides all RGB controls (not needed for a trace)
-        #     if not key == 'red': self.viewer_live_trace.get_action(key).trigger()
-        #     self.viewer_live_trace.get_action(key).setVisible(False)
-        # self.viewer_live_trace.get_action('histo').trigger()
-        #
-        # self.viewer_live_trace.histogrammer._histograms['red'].item.setLevels(-max, max)
-        # self.viewer_live_trace.histogrammer._histograms['red'].item.setHistogramRange(-max, max)
-
-        self.viewer_live_trace.x_axis = utils.Axis(
-            data=args[2], label="Time", units="s"
-        )
-        self.viewer_live_trace.y_axis = utils.Axis(
-            data=args[1], label="Frequency", units="m"
-        )
 
         self.data_in["pulse_in"].spectrum = args[3]
         # self.data_in['pulse_in'] = substract_linear_phase(self.data_in['pulse_in'])
-        self.viewer_live_time.show_data(
-            [np.abs(self.data_in["pulse_in"].field) ** 2],
-            x_axis=utils.Axis(data=self.data_in["pulse_in"].t, label="Time", units="s"),
-            labels=["Temporal Intensity"],
-        )
-        self.viewer_live_lambda.show_data(
-            [np.abs(self.data_in["pulse_in"].spectrum) ** 2],
-            x_axis=utils.Axis(
-                data=self.data_in["pulse_in"].wl, label="Wavelength", units="m"
-            ),
-            labels=["Spectral Intensity"],
-        )
+        self.viewer_live_time.show_data(DataWithAxes('retriever',
+                                                     source='calculated',
+                                                     data=[np.abs(self.data_in["pulse_in"].field) ** 2],
+                                                     axes=[Axis(data=self.data_in["pulse_in"].t, label="Time",
+                                                                units="s")], ))
+        self.viewer_live_lambda.show_data(DataWithAxes('retriever',
+                                                       source='calculated',
+                                                       data=[self.data_in["pulse_in"].spectral_intensity],
+                                                       axes=[Axis(data=convert(self.data_in["pulse_in"].w + self.data_in["pulse_in"].w0, "om", "wl"), label="Wavelength",
+                                                                  units="m")], ))
 
     @Slot(SimpleNamespace)
     def display_results(self, result):
@@ -1936,17 +2008,17 @@ class Retriever(QObject):
         self.state.append("result_ok")
         self.ui.dock_retrieved_data.raiseDock()
 
-        self.data_in["pulse_in"].spectrum = result.pulse_retrieved
-        fundamental = self.data_in["raw_spectrum"]["data"]
-        wavelength = self.data_in["raw_spectrum"]["x_axis"]["data"]
+        retrieved_pulse = self.data_in["pulse_in"].copy()
+        retrieved_pulse.spectrum = result.pulse_retrieved
+        fundamental = self.data_in["raw_spectrum"].get_data_index()
+        wavelength = self.data_in["raw_spectrum"].get_axis_from_index(0)[0].get_data()
         # fundamental /= wavelength * wavelength
-        spec = self.data_in["pulse_in"].spectral_intensity
-        spec = scipy.interpolate.interp1d(
-            self.data_in["pulse_in"].wl, spec, bounds_error=False, fill_value=0.0
-        )(wavelength)
+        spec = retrieved_pulse.spectral_intensity
+        spec = interp1d(retrieved_pulse.wl, spec, bounds_error=False, fill_value=0.0)(wavelength)
 
-        fundamental *= lib.best_scale(fundamental, spec)
-        print("spectrum error", "%e" % lib.nrms(fundamental, spec))
+        if not self.fake_fundamental:
+            fundamental *= lib.best_scale(fundamental, spec)
+            print("spectrum error", "%e" % lib.nrms(fundamental, spec))
 
         # do the retrieval plot
 
@@ -1960,8 +2032,69 @@ class Retriever(QObject):
             phase_blanking=True,
             phase_blanking_threshold=0.01,
             limit=True,
+            compare_fundamental=not self.fake_fundamental
         )
         self.data_canvas.draw()
+
+    #################################
+    # Propagation
+    #################################
+    def prop_settings_changed(self, param, changes):
+        for param, change, data in changes:
+            path = self.settings.childPath(param)
+            if change == "childAdded":
+                pass
+            elif change == "parent":
+                pass
+            elif change == "value":
+                if param.name() in [
+                    "material1",
+                    "material2",
+                    "thickness1",
+                    "thickness2",
+                    "prop_oversampling",
+                    "fit_threshold",
+                ]:
+                    self.propagate()
+                elif param.name() == "dt_fwhm":
+                    self.update_fwhm()
+
+    # def refine(self):
+    #     if "result_ok" not in self.state:
+    #         popup_message("Error", "Complete the retrieval first")
+    #         return
+    #
+    #     self.propagated_pulse = Pulse(
+    #         self.result.pnps.ft, self.result.pnps.w0, unit="om"
+    #     )
+    #     self.propagated_pulse.spectrum = self.result.pulse_retrieved
+    #     tck = splrep(self.propagated_pulse.w, self.propagated_pulse.spectrum)
+    #
+    #     def fun(tck, pulse):
+    #         mod_int = BSpline(*tck)(pulse.w)
+    #         new_pulse = pulse.copy()
+    #         new_pulse.spectrum = mod_int*np.abs(new_pulse.spectrum) * np.exp(1j* np.angle(new_pulse.spectrum))
+    #
+    #         return self.retriever.trace_error(new_pulse)
+    #
+    #     res = scipy.minimize(fun, tck, method='Nelder-Mead', tol=1e-6)
+    #     print(res.x)
+    #     mod_int = BSpline(*(res.x))(self.propagated_pulse.w)
+    #     new_pulse = self.propagated_pulse.copy()
+    #     new_pulse.spectrum = mod_int * np.abs(new_pulse.spectrum) * np.exp(1j * np.angle(new_pulse.spectrum))
+    #
+    #     self.data_canvas.figure.clf()
+    #     RetrievalResultPlot(
+    #         self.result,
+    #         fig=self.data_canvas.figure,
+    #         fundamental=fundamental,
+    #         fundamental_wavelength=wavelength,
+    #         oversampling=1,
+    #         phase_blanking=True,
+    #         phase_blanking_threshold=0.01,
+    #         limit=True,
+    #     )
+    #     self.data_canvas.draw()
 
     def propagate(self):
         if "result_ok" not in self.state:
@@ -2032,7 +2165,7 @@ class Retriever(QObject):
         ).value()
 
         self.prop_canvas.figure.clf()
-        PulsePropagationPlot(
+        prop_plot = PulsePropagationPlot(
             self.propagated_pulse,
             phasepoly,
             fwhm=self.pulse_settings.child("pulse_prop", "fwhm_meas").value(),
@@ -2043,89 +2176,104 @@ class Retriever(QObject):
                 "materials", "fit_threshold"
             ).value(),
         )
+
+        self.pulse_settings.child("pulse_prop", "ratio").setValue(
+            prop_plot.intensity_fwhm.sum() / prop_plot.tamp.sum() * 100
+        )
         self.prop_canvas.draw()
 
-    def load_last_scan(self):
-        try:
-            viewer = self.dashboard.scan_module.ui.scan2D_graph
-            parameter_axis = utils.Axis(
-                data=viewer.x_axis_scaled.copy(),
-                label=viewer.scaling_options["scaled_xaxis"]["label"],
-                units=viewer.scaling_options["scaled_xaxis"]["units"],
-            )
-            wl = utils.Axis(
-                data=viewer.y_axis_scaled.copy(),
-                label=viewer.scaling_options["scaled_yaxis"]["label"],
-                units=viewer.scaling_options["scaled_yaxis"]["units"],
-            )
-            data = self.dashboard.scan_module.scan_data_2D[0].T.copy()
-
-            self.set_data_in_exp(data, wl, parameter_axis)
-        except Exception as e:
-            pass
-
+    #################################
+    # Data saving
+    #################################
     def save_data(self, save_file_pathname=None):
         try:
             if save_file_pathname is None:
-                save_file_pathname = gutils.select_file(
-                    start_path=self.save_file_pathname, save=True, ext="h5"
-                )  # see daq_utils
-            h5saver = H5Saver(save_type="custom")
-            h5saver.init_file(
-                update_h5=True,
-                custom_naming=False,
-                addhoc_file_path=save_file_pathname,
-                raw_group_name="PyMoDAQFemtoAnalysis",
-            )
+                save_file_pathname = gutils.select_file(save=True, ext="h5", filter='h5 files (*.h5)')
+            h5saver = H5SaverLowLevel(save_type="custom")
+            h5saver.init_file(save_file_pathname,
+                              raw_group_name='PyMoDAQFemto',
+                              new_file=True
+                              )
+            datasaver = DataSaverLoader(h5saver)
 
+            # DataIn
             data_in_group = h5saver.get_set_group(h5saver.raw_group, "DataIn")
-            trace_group = h5saver.get_set_group(data_in_group, "NLTrace")
-            spectrum_group = h5saver.get_set_group(data_in_group, "FunSpectrum")
-            h5saver.add_data(trace_group, self.data_in["raw_trace"], scan_type="")
-            h5saver.add_data(spectrum_group, self.data_in["raw_spectrum"], scan_type="")
-
-            settings_str = b"<DataIn_settings>" + ioxml.parameter_to_xml_string(
-                self.settings
-            )
-            settings_str += b"</DataIn_settings>"
+            settings_str = b"<DataIn_settings>" + ioxml.parameter_to_xml_string(self.settings) + b"</DataIn_settings>"
             h5saver.set_attr(data_in_group, "settings", settings_str)
+
+            if "trace_loaded" in self.state:
+                trace_group = h5saver.get_set_group(data_in_group, "Trace")
+                datasaver.add_data(trace_group, self.data_in["raw_trace"])
+
+            if "spectrum_loaded" in self.state:
+                spectrum_group = h5saver.get_set_group(data_in_group, "FunSpectrum")
+                datasaver.add_data(spectrum_group, self.data_in["raw_spectrum"])
+
+            # Retrieval result
             if self.result is not None:
                 rr = self.result
-                result_group = h5saver.get_set_group(h5saver.raw_group, "Result")
+                result_group = h5saver.get_set_group(h5saver.raw_group, "Retrieval Result")
 
-                spectrum_group = h5saver.get_set_group(result_group, "Spectrum")
-                h5saver.add_data(
-                    spectrum_group,
-                    dict(
-                        data=rr.pulse_retrieved,
-                        x_axis=dict(data=rr.pnps.ft.w, label="frequency", units="Hz"),
-                    ),
-                    scan_type="",
-                )
+                # Spectral Intensity
+                spectrum_group = h5saver.get_set_group(result_group, "Spectral intensity")
+                datasaver.add_data(spectrum_group, DataWithAxes("Spectral intensity", source="calculated",
+                                                                data=[lib.abs2(rr.pulse_retrieved)],
+                                                                axes=[Axis(
+                                                                    data=convert(rr.pnps.w + rr.pnps.w0, "om", "wl"),
+                                                                    label="Wavelength",
+                                                                    units="m")]))
+                # Spectral phase
+                phase_group = h5saver.get_set_group(result_group, "Spectral phase")
+                datasaver.add_data(phase_group, DataWithAxes("Spectral intensity", source="calculated",
+                                                             data=[lib.phase(rr.pulse_retrieved)],
+                                                             axes=[
+                                                                 Axis(data=convert(rr.pnps.w + rr.pnps.w0, "om", "wl"),
+                                                                      label="Wavelength",
+                                                                      units="m")]))
 
                 h5saver.set_attr(spectrum_group, "w0", rr.pnps.w0)
                 h5saver.set_attr(spectrum_group, "Npts", rr.pnps.ft.N)
+                h5saver.set_attr(phase_group, "w0", rr.pnps.w0)
+                h5saver.set_attr(phase_group, "Npts", rr.pnps.ft.N)
 
-                trace_group_retrieved = h5saver.get_set_group(result_group, "NLTrace")
-                trace_retrieved = dict(
-                    data=rr.trace_retrieved,
-                    x_axis=dict(data=rr.pnps.process_w, label="frequency", units="Hz"),
-                    y_axis=dict(
-                        data=rr.parameter, label="parameter", units="Par. units"
-                    ),
-                )
-                h5saver.add_data(trace_group_retrieved, trace_retrieved, scan_type="")
+                # Retrieved Trace
+                trace_group_retrieved = h5saver.get_set_group(result_group, "Retrieved Trace")
+                trace_retrieved = DataWithAxes("Retrieved Trace", source="calculated",
+                                               data=[rr.trace_retrieved],
+                                               axes=[Axis(data=rr.parameter, label="Parameter", units="p.u.", index=0),
+                                                     Axis(data=rr.pnps.process_w, label="Frequency", units="Hz",
+                                                          index=1)],
+                                               nav_indexes=(0,))
+                datasaver.add_data(trace_group_retrieved, trace_retrieved)
 
             if self.propagated_pulse is not None:
-                propag_group = h5saver.get_set_group(result_group, "Propagation")
-                h5saver.add_data(
-                    propag_group,
-                    dict(
-                        data=self.propagated_pulse.spectrum,
-                        x_axis=dict(data=rr.pnps.ft.w, label="frequency", units="Hz"),
-                    ),
-                    scan_type="",
-                )
+                propag_group = h5saver.get_set_group(h5saver.raw_group, "Propagation")
+                # Spectrum
+                spectrum_prop_group = h5saver.get_set_group(propag_group, "Spectral intensity")
+                datasaver.add_data(spectrum_prop_group, DataWithAxes("Spectral intensity", source="calculated",
+                                                                     data=[self.propagated_pulse.spectral_intensity],
+                                                                     axes=[Axis(data=rr.pnps.ft.w, label="Frequency",
+                                                                                units="Hz")]))
+
+                phase_prop_group = h5saver.get_set_group(propag_group, "Spectral phase")
+                datasaver.add_data(phase_prop_group, DataWithAxes("Spectral phase", source="calculated",
+                                                                  data=[self.propagated_pulse.spectral_phase],
+                                                                  axes=[Axis(data=rr.pnps.ft.w, label="Frequency",
+                                                                             units="Hz")]))
+                # Time
+                time_group = h5saver.get_set_group(propag_group, "Temporal intensity")
+                t = np.linspace(self.propagated_pulse.t[0], self.propagated_pulse.t[-1], self.propagated_pulse.N *
+                                self.prop_settings.child("materials", "prop_oversampling").value())
+                datasaver.add_data(time_group, DataWithAxes("Temporal intensity", source="calculated",
+                                                            data=[self.propagated_pulse.intensity],
+                                                            axes=[Axis(data=self.propagated_pulse.t, label="time",
+                                                                       units="s")]))
+                time_phase_group = h5saver.get_set_group(propag_group, "Temporal phase")
+                datasaver.add_data(time_phase_group, DataWithAxes("Temporal phase", source="calculated",
+                                                                  data=[self.propagated_pulse.phase],
+                                                                  axes=[Axis(data=self.propagated_pulse.t, label="time",
+                                                                             units="s")]))
+
                 settings_str = b'<prop_settings title="Prop. Settings" type="group">'
                 settings_str += ioxml.parameter_to_xml_string(self.prop_settings)
                 settings_str += ioxml.parameter_to_xml_string(self.pulse_settings)
@@ -2142,12 +2290,12 @@ class Retriever(QObject):
             h5saver.set_attr(h5saver.raw_group, "settings", settings_str)
 
         except Exception as e:
-            pass
+            logger.exception(str(e))
 
         h5saver.close_file()
 
     def save_settings_to_file(self):
-        path_to_file = os.path.join(self.resources_dir, 'retriever_settings.h5')
+        path_to_file = Path(os.path.join(self.resources_dir, 'retriever_settings.h5'))
 
         msg = QtWidgets.QMessageBox()
         msg.setWindowTitle('Save settings to file')
@@ -2170,11 +2318,12 @@ class Retriever(QObject):
         if not os.path.exists(path_to_file):
             popup_message("Error", "Did not find a file with saved settings.")
         else:
-            h5file = self.h5browse.open_file(path_to_file)
-            fund_data, fund_axes, fund_nav_axes, is_spread = get_h5_data_from_node(self.h5browse.get_node('/PyMoDAQFemtoAnalysis/DataIn/FunSpectrum/Data'))
-            trace_data, trace_axes, trace_nav_axes, is_spread = get_h5_data_from_node(self.h5browse.get_node('/PyMoDAQFemtoAnalysis/DataIn/NLTrace/Data'))
-            attr_dict, settings, scan_settings, pixmaps = self.h5browse.get_h5_attributes('/PyMoDAQFemtoAnalysis')
-            self.h5browse.close_file()
+            self.h5utils.open_file(path_to_file, 'r+')
+            dataloader = DataLoader(self.h5utils)
+            spectrum = dataloader.load_data('/PyMoDAQFemto/DataIn/FunSpectrum/Data00')
+            trace = dataloader.load_data('/PyMoDAQFemto/DataIn/Trace/Data00')
+            settings = dataloader.get_node('/PyMoDAQFemto').attrs['settings']
+            self.h5utils.close_file()
 
             saved_settings = ioxml.XML_string_to_parameter(settings)
             saved_param = Parameter.create(name="saved_settings", type="group", children=saved_settings)
@@ -2183,78 +2332,41 @@ class Retriever(QObject):
             for child in putils.iter_children_params(self.settings.child("algo"), childlist=[]):
                 path = ["algo"]
                 path.extend(self.settings.child("algo").childPath(child))
-                self.settings.child(*path).setValue(saved_param.child('dataIN_settings',*path).value())
+                self.settings.child(*path).setValue(saved_param.child('dataIN_settings', *path).value())
             # Data Info settings
             for child in putils.iter_children_params(self.settings.child("data_in_info"), childlist=[]):
                 path = ["data_in_info"]
                 path.extend(self.settings.child("data_in_info").childPath(child))
-                self.settings.child(*path).setValue(saved_param.child('dataIN_settings',*path).value())
+                self.settings.child(*path).setValue(saved_param.child('dataIN_settings', *path).value())
             # Processing settings
             for child in putils.iter_children_params(self.settings.child("processing"), childlist=[]):
                 path = ["processing"]
                 path.extend(self.settings.child("processing").childPath(child))
-                self.settings.child(*path).setValue(saved_param.child('dataIN_settings',*path).value())
-            #Retrieving settings
+                self.settings.child(*path).setValue(saved_param.child('dataIN_settings', *path).value())
+            # Retrieving settings
             for child in putils.iter_children_params(self.settings.child("retrieving"), childlist=[]):
                 path = ["retrieving"]
                 path.extend(self.settings.child("retrieving").childPath(child))
-                self.settings.child(*path).setValue(saved_param.child('dataIN_settings',*path).value())
-
-            # data, axes, nav_axes, is_spread = self.h5browse.get_h5_data(node_path)
-            # data_in_group = h5saver.get_set_group(h5saver.raw_group, "DataIn")
-            # trace_group = h5saver.get_set_group(data_in_group, "NLTrace")
-            # spectrum_group = h5saver.get_set_group(data_in_group, "FunSpectrum")
-            # h5saver.add_data(trace_group, self.data_in["raw_trace"], scan_type="")
-            # h5saver.add_data(spectrum_group, self.data_in["raw_spectrum"], scan_type="")
-            # settings = ioxml.XML_string_to_parameter()
+                self.settings.child(*path).setValue(saved_param.child('dataIN_settings', *path).value())
 
             if self.data_in is None:
                 self.data_in = DataIn(source="experimental")
 
-            # Load spectrum
             self.data_in.update(
                 dict(
-                    raw_spectrum={"data": fund_data.astype("double"), "x_axis": fund_axes["x_axis"]},
+                    raw_spectrum=spectrum,
+                    spectrum_file_path=path_to_file,
+                    spectrum_node_path='/PyMoDAQFemto/DataIn/FunSpectrum/Data00',
                 )
             )
             self.update_spectrum_info(self.data_in["raw_spectrum"])
             self.display_spectrum_in()
 
             # Load trace
-            self.data_in.update(
-                dict(
-                    raw_trace={"data": trace_data, "x_axis": trace_axes['x_axis'], "y_axis": trace_axes['y_axis']},
-                )
-            )
-            self.update_trace_info(self.data_in["raw_trace"])
-            self.display_trace_in()
-            self.h5browse.close_file()
+            self.settings.child("data_in_info", "loaded_file").setValue(path_to_file)
+            self.settings.child("data_in_info", "loaded_node").setValue('/PyMoDAQFemto/DataIn/Trace/Data00')
+            self.set_data_in_exp(trace, path_to_file, '/PyMoDAQFemto/DataIn/Trace/Data00')
 
-    def restart_fun(self, ask=False):
-        ret = False
-        mssg = QtWidgets.QMessageBox()
-        if ask:
-            mssg.setText(
-                "You have to restart the application to take the modifications into account!"
-            )
-            mssg.setInformativeText("Do you want to restart?")
-            mssg.setStandardButtons(mssg.Ok | mssg.Cancel)
-            ret = mssg.exec()
-
-        if ret == mssg.Ok or not ask:
-            self.quit_fun()
-            subprocess.call([sys.executable, __file__])
-
-    def quit_fun(self):
-        """
-
-        """
-        try:
-            if hasattr(self, "mainwindow"):
-                self.mainwindow.close()
-
-        except Exception as e:
-            logger.exception(str(e))
 
 class RetrieverWorker(QObject):
     result_signal = Signal(SimpleNamespace)
@@ -2329,9 +2441,8 @@ class RetrieverWorker(QObject):
         elif (
                 self.settings.child("retrieving", "guess_type").value() == "Random gaussian"
         ):
-            pulse_guess=self.data_in["pulse_in"].copy()
-            random_gaussian(pulse_guess, fwhm * 1e-15, phase_max=amplitude)
-            guess = pulse_guess.spectrum
+            random_gaussian(self.data_in["pulse_in"], fwhm * 1e-15, phase_max=amplitude)
+            guess = self.data_in["pulse_in"].spectrum
 
         self.retriever.retrieve(self.data_in["trace_in"], guess, weights=None)
 
@@ -2342,7 +2453,7 @@ class RetrieverWorker(QObject):
 
 
 def main():
-    from pymodaq.daq_utils.daq_utils import get_set_preset_path
+    # from pymodaq.daq_utils.daq_utils import get_set_preset_path
 
     app = QtWidgets.QApplication(sys.argv)
     win = QtWidgets.QMainWindow()

@@ -20,22 +20,25 @@ from pathlib import Path
 from pyqtgraph.dockarea import Dock
 from pyqtgraph.parametertree import Parameter, ParameterTree
 
-from pymodaq.utils import daq_utils as utils
-from pymodaq.utils import gui_utils as gutils
-from pymodaq.utils.math_utils import my_moment, linspace_step
-from pymodaq.utils.data import Axis, DataWithAxes
-from pymodaq.utils.parameter import utils as putils, ioxml
-from pymodaq.utils.h5modules.browsing import browse_data
-from pymodaq.utils.plotting.data_viewers.viewer1D import Viewer1D
-from pymodaq.utils.plotting.data_viewers.viewer2D import Viewer2D
-from pymodaq.utils.plotting.utils.plot_utils import RoiInfo
-from pymodaq.utils.managers.action_manager import QAction
-from pymodaq.utils.managers.roi_manager import LinearROI
-from pymodaq.utils.h5modules.browsing import H5BrowserUtil, H5Browser
-from pymodaq.utils.h5modules.saving import H5SaverLowLevel
-from pymodaq.utils.h5modules.data_saving import DataLoader, DataSaverLoader
-from pymodaq.utils.logger import set_logger, get_module_name, get_base_logger
-from pymodaq.utils.config import Config
+from pymodaq_utils import utils as utils
+from pymodaq_utils.math_utils import my_moment, linspace_step
+from pymodaq_utils.logger import set_logger, get_module_name, get_base_logger
+from pymodaq_utils.config import Config
+
+from pymodaq_gui.utils import DockArea
+from pymodaq_gui.parameter import utils as putils, ioxml
+from pymodaq_gui.h5modules.browsing import browse_data
+from pymodaq_gui.h5modules.browsing import H5BrowserUtil, H5Browser
+from pymodaq_gui.h5modules.saving import H5SaverLowLevel
+from pymodaq_gui.utils.file_io import select_file
+from pymodaq_gui.plotting.data_viewers.viewer1D import Viewer1D
+from pymodaq_gui.plotting.data_viewers.viewer2D import Viewer2D
+from pymodaq_gui.plotting.utils.plot_utils import RoiInfo
+from pymodaq_gui.managers.action_manager import QAction
+from pymodaq_gui.managers.roi_manager import LinearROI
+
+from pymodaq_data.data import Axis, DataWithAxes, DataSource
+from pymodaq_data.h5modules.data_saving import DataLoader, DataSaverLoader
 
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
 from pypret.frequencies import om2wl, wl2om, convert
@@ -70,7 +73,7 @@ class DataIn(OrderedDict):
     def __init__(
         self,
         name="",
-        source="",
+        source=DataSource.raw,
         trace_in=None,
         pulse_in=None,
         raw_spectrum=None,
@@ -91,10 +94,10 @@ class DataIn(OrderedDict):
         if not isinstance(name, str):
             raise TypeError("name for the DataIn class should be a string")
         self["name"] = name
-        if not isinstance(source, str):
-            raise TypeError("source for the DataIn class should be a string")
-        elif not ("simulated" in source or "experimental" in source):
-            raise ValueError('Invalid "source" for the DataIn class')
+        # if not isinstance(source, str):
+        #     raise TypeError("source for the DataIn class should be a string")
+        # elif not ("simulated" in source or "experimental" in source):
+        #     raise ValueError('Invalid "source" for the DataIn class')
         self["source"] = source
 
         self["trace_in"] = trace_in
@@ -942,26 +945,20 @@ class Retriever(QObject):
                 self.toolbar.addSeparator()
                 self.load_last_scan_action.triggered.connect(self.load_last_scan)
 
-        self.load_trace_in_action = QAction(
-            QIcon(QPixmap(":/icons/Icon_Library/Open_2D.png")),
-            "Load Experimental Trace",
-        )
-        self.load_spectrum_in_action = QAction(
-            QIcon(QPixmap(":/icons/Icon_Library/Open_1D.png")),
-            "Load Experimental Spectrum",
-        )
-        self.gen_trace_in_action = QAction(
-            QIcon(QPixmap(":/icons/Icon_Library/ini.png")),
-            "Simulate Experimental Trace",
-        )
-        self.load_from_simulation_action = QAction(
-            QIcon(QPixmap(":/icons/Icon_Library/Open_sim.png")),
-            "Load Data from Simulation",
-        )
+        self.load_trace_in_action = QAction("Load Experimental Trace")
+        self.load_trace_in_action.set_icon("Open_2D")
 
-        self.save_data_action = QAction(
-            QIcon(QPixmap(":/icons/Icon_Library/Save.png")), "Save Data"
-        )
+        self.load_spectrum_in_action = QAction("Load Experimental Spectrum")
+        self.load_spectrum_in_action.set_icon("Open_1D")
+
+        self.gen_trace_in_action = QAction("Simulate Experimental Trace")
+        self.gen_trace_in_action.set_icon("ini")
+
+        self.load_from_simulation_action = QAction("Load Data from Simulation")
+        self.load_from_simulation_action.set_icon("Open_sim")
+
+        self.save_data_action = QAction("Save Data")
+        self.save_data_action.set_icon("Save")
 
         self.save_settings_action = QAction(
             QIcon(QPixmap(os.path.join(self.resources_dir, 'save_settings.png'))),
@@ -972,10 +969,8 @@ class Retriever(QObject):
             "Recall saved settings",
         )
 
-        self.show_log_action = QAction(
-            QIcon(QPixmap(":/icons/Icon_Library/information2.png")),
-            "Show log file",
-        )
+        self.show_log_action = QAction("Show log file")
+        self.show_log_action.set_icon("information2")
 
         self.load_trace_in_action.triggered.connect(self.load_trace_in)
         self.load_spectrum_in_action.triggered.connect(self.load_spectrum_in)
@@ -1049,6 +1044,10 @@ class Retriever(QObject):
         self.viewer_live_trace.set_gradient('red', gradient="femto")
         for key in ['red', 'green', 'blue']:  # Hides all RGB controls (not needed for a trace)
             self.viewer_trace_in.get_action(key).setVisible(False)
+        self.viewer_live_trace.get_action('aspect_ratio').setChecked(False)
+        self.viewer_live_trace.get_action('aspect_ratio').trigger()
+        self.viewer_live_trace.get_action('aspect_ratio').trigger()
+        # self.viewer_trace_in.get_action('aspect_ratio').setVisible(False) #Disable aspect ratio
 
         self.viewer_live_time = Viewer1D()
         self.viewer_live_lambda = Viewer1D()
@@ -1357,7 +1356,7 @@ class Retriever(QObject):
 
         else:  # User selected a node
             if self.data_in is None:
-                self.data_in = DataIn(source="experimental")
+                self.data_in = DataIn(source=DataSource.raw)
 
             # Wavelength axis
             scaling_wl = self.settings.child(
@@ -1421,7 +1420,7 @@ class Retriever(QObject):
     def create_fake_fundamental(self):
         self.fake_fundamental = True
         if self.data_in is None:
-            self.data_in = DataIn(source="experimental")
+            self.data_in = DataIn(source=DataSource.raw)
 
         # We use central wavelength of the trace
         trace_wl = self.get_trace_in().axes[1]
@@ -1444,7 +1443,7 @@ class Retriever(QObject):
         else:
             wlreal = trace_wl
 
-        spectrum = DataWithAxes("Fundamental Spectrum", source="calculated",
+        spectrum = DataWithAxes("Fundamental Spectrum", source=DataSource.calculated,
                                 data=[np.exp(-(wlreal - wl0) ** 2 / (2 * wl_fwhm ** 2))],
                                 axes=[Axis(data=wlreal, label="Wavelength", units="m")])
 
@@ -1496,11 +1495,11 @@ class Retriever(QObject):
             "data_in_info", "trace_in_info", "wl_scaling"
         ).value()
 
-        wl.units = "m"
+        # wl.units = "m"
         wl.data = wl.get_data() * scaling_wl
 
         parameter_axis.data = parameter_axis.get_data() * scaling_parameter
-        parameter_axis.units = "p.u."
+        # parameter_axis.units = "p.u."
 
         if trace.sig_indexes[0] == 0:
             trace.axes = [wl, parameter_axis]
@@ -1513,6 +1512,7 @@ class Retriever(QObject):
                 raw_trace=trace,
                 file_path=fname,
                 node_path=node_path,
+                parameter_units = parameter_axis.units
             )
         )
 
@@ -1553,6 +1553,9 @@ class Retriever(QObject):
         self.ui.dock_data_in.raiseDock()
         self.viewer_trace_in.show_data(self.data_in['raw_trace'])
         self.viewer_trace_in.get_action('autolevels').trigger()  # Auto scale colormap
+        self.viewer_trace_in.get_action('aspect_ratio').trigger()
+        self.viewer_trace_in.get_action('aspect_ratio').setVisible(False) #Disable aspect ratio
+
         for key in ['red', 'green', 'blue']:  # Hides all RGB controls (not needed for a trace)
             # if not key == 'red': self.viewer_trace_in.get_action(key).trigger()
             self.viewer_trace_in.get_action(key).setVisible(False)
@@ -1599,15 +1602,16 @@ class Retriever(QObject):
                 self.data_in = DataIn(source="simulated")
 
             axis.index = 1
-            trace = DataWithAxes('simulator_trace', source='calculated', data=[data], axes=[axis, parameter_axis],
+            trace = DataWithAxes('simulator_trace', source=DataSource.calculated, data=[data], axes=[axis, parameter_axis],
                                  nav_indexes=(0,))
-            spectrum = DataWithAxes('simulator_spectrum', source='calculated', data=[spectrum_data],
+            spectrum = DataWithAxes('simulator_spectrum', source=DataSource.calculated, data=[spectrum_data],
                                     axes=[spectrum_axis])
             self.data_in.update(
                 dict(
                     source="simulated",
                     raw_trace=trace,
                     raw_spectrum=spectrum,
+                    parameter_units=parameter_axis.units
                 ))
 
             self.display_trace_in()
@@ -1981,23 +1985,24 @@ class Retriever(QObject):
         # max = 0.8 * np.max([np.abs(np.max(args[0])), np.abs(np.min(args[0]))])
         self.viewer_live_trace.set_gradient('red', gradient="femto")
         self.viewer_live_trace.show_data(DataWithAxes('retriever',
-                                                      source='calculated',
+                                                      source=DataSource.calculated,
                                                       data=[args[0]],
                                                       axes=[
-                                                          Axis(data=args[1], label="Parameter", units="p.u.", index=0),
+                                                          Axis(data=args[1], label="Parameter", units=self.data_in["parameter_units"], index=0),
                                                           Axis(data=args[2], label="Frequency", units="Hz", index=1)],
                                                       nav_indexes=(0,)))
         self.viewer_live_trace.get_action('autolevels').trigger()
+        # self.viewer_live_trace.get_action('aspect_ratio').trigger()
 
         self.data_in["pulse_in"].spectrum = args[3]
         # self.data_in['pulse_in'] = substract_linear_phase(self.data_in['pulse_in'])
         self.viewer_live_time.show_data(DataWithAxes('retriever',
-                                                     source='calculated',
+                                                     source=DataSource.calculated,
                                                      data=[np.abs(self.data_in["pulse_in"].field) ** 2],
                                                      axes=[Axis(data=self.data_in["pulse_in"].t, label="Time",
                                                                 units="s")], ))
         self.viewer_live_lambda.show_data(DataWithAxes('retriever',
-                                                       source='calculated',
+                                                       source=DataSource.calculated,
                                                        data=[self.data_in["pulse_in"].spectral_intensity],
                                                        axes=[Axis(data=convert(self.data_in["pulse_in"].w + self.data_in["pulse_in"].w0, "om", "wl"), label="Wavelength",
                                                                   units="m")], ))
@@ -2188,7 +2193,7 @@ class Retriever(QObject):
     def save_data(self, save_file_pathname=None):
         try:
             if save_file_pathname is None:
-                save_file_pathname = gutils.select_file(save=True, ext="h5", filter='h5 files (*.h5)')
+                save_file_pathname = select_file(save=True, ext="h5", filter='h5 files (*.h5)')
             h5saver = H5SaverLowLevel(save_type="custom")
             h5saver.init_file(save_file_pathname,
                               raw_group_name='PyMoDAQFemto',
@@ -2216,7 +2221,7 @@ class Retriever(QObject):
 
                 # Spectral Intensity
                 spectrum_group = h5saver.get_set_group(result_group, "Spectral intensity")
-                datasaver.add_data(spectrum_group, DataWithAxes("Spectral intensity", source="calculated",
+                datasaver.add_data(spectrum_group, DataWithAxes("Spectral intensity", source=DataSource.calculated,
                                                                 data=[lib.abs2(rr.pulse_retrieved)],
                                                                 axes=[Axis(
                                                                     data=convert(rr.pnps.w + rr.pnps.w0, "om", "wl"),
@@ -2224,7 +2229,7 @@ class Retriever(QObject):
                                                                     units="m")]))
                 # Spectral phase
                 phase_group = h5saver.get_set_group(result_group, "Spectral phase")
-                datasaver.add_data(phase_group, DataWithAxes("Spectral intensity", source="calculated",
+                datasaver.add_data(phase_group, DataWithAxes("Spectral intensity", source=DataSource.calculated,
                                                              data=[lib.phase(rr.pulse_retrieved)],
                                                              axes=[
                                                                  Axis(data=convert(rr.pnps.w + rr.pnps.w0, "om", "wl"),
@@ -2238,7 +2243,7 @@ class Retriever(QObject):
 
                 # Retrieved Trace
                 trace_group_retrieved = h5saver.get_set_group(result_group, "Retrieved Trace")
-                trace_retrieved = DataWithAxes("Retrieved Trace", source="calculated",
+                trace_retrieved = DataWithAxes("Retrieved Trace", source=DataSource.calculated,
                                                data=[rr.trace_retrieved],
                                                axes=[Axis(data=rr.parameter, label="Parameter", units="p.u.", index=0),
                                                      Axis(data=rr.pnps.process_w, label="Frequency", units="Hz",
@@ -2250,13 +2255,13 @@ class Retriever(QObject):
                 propag_group = h5saver.get_set_group(h5saver.raw_group, "Propagation")
                 # Spectrum
                 spectrum_prop_group = h5saver.get_set_group(propag_group, "Spectral intensity")
-                datasaver.add_data(spectrum_prop_group, DataWithAxes("Spectral intensity", source="calculated",
+                datasaver.add_data(spectrum_prop_group, DataWithAxes("Spectral intensity", source=DataSource.calculated,
                                                                      data=[self.propagated_pulse.spectral_intensity],
                                                                      axes=[Axis(data=rr.pnps.ft.w, label="Frequency",
                                                                                 units="Hz")]))
 
                 phase_prop_group = h5saver.get_set_group(propag_group, "Spectral phase")
-                datasaver.add_data(phase_prop_group, DataWithAxes("Spectral phase", source="calculated",
+                datasaver.add_data(phase_prop_group, DataWithAxes("Spectral phase", source=DataSource.calculated,
                                                                   data=[self.propagated_pulse.spectral_phase],
                                                                   axes=[Axis(data=rr.pnps.ft.w, label="Frequency",
                                                                              units="Hz")]))
@@ -2264,12 +2269,12 @@ class Retriever(QObject):
                 time_group = h5saver.get_set_group(propag_group, "Temporal intensity")
                 t = np.linspace(self.propagated_pulse.t[0], self.propagated_pulse.t[-1], self.propagated_pulse.N *
                                 self.prop_settings.child("materials", "prop_oversampling").value())
-                datasaver.add_data(time_group, DataWithAxes("Temporal intensity", source="calculated",
+                datasaver.add_data(time_group, DataWithAxes("Temporal intensity", source=DataSource.calculated,
                                                             data=[self.propagated_pulse.intensity],
                                                             axes=[Axis(data=self.propagated_pulse.t, label="time",
                                                                        units="s")]))
                 time_phase_group = h5saver.get_set_group(propag_group, "Temporal phase")
-                datasaver.add_data(time_phase_group, DataWithAxes("Temporal phase", source="calculated",
+                datasaver.add_data(time_phase_group, DataWithAxes("Temporal phase", source=DataSource.calculated,
                                                                   data=[self.propagated_pulse.phase],
                                                                   axes=[Axis(data=self.propagated_pulse.t, label="time",
                                                                              units="s")]))
@@ -2338,19 +2343,9 @@ class Retriever(QObject):
                 path = ["data_in_info"]
                 path.extend(self.settings.child("data_in_info").childPath(child))
                 self.settings.child(*path).setValue(saved_param.child('dataIN_settings', *path).value())
-            # Processing settings
-            for child in putils.iter_children_params(self.settings.child("processing"), childlist=[]):
-                path = ["processing"]
-                path.extend(self.settings.child("processing").childPath(child))
-                self.settings.child(*path).setValue(saved_param.child('dataIN_settings', *path).value())
-            # Retrieving settings
-            for child in putils.iter_children_params(self.settings.child("retrieving"), childlist=[]):
-                path = ["retrieving"]
-                path.extend(self.settings.child("retrieving").childPath(child))
-                self.settings.child(*path).setValue(saved_param.child('dataIN_settings', *path).value())
 
             if self.data_in is None:
-                self.data_in = DataIn(source="experimental")
+                self.data_in = DataIn(source=DataSource.raw)
 
             self.data_in.update(
                 dict(
@@ -2367,6 +2362,16 @@ class Retriever(QObject):
             self.settings.child("data_in_info", "loaded_node").setValue('/PyMoDAQFemto/DataIn/Trace/Data00')
             self.set_data_in_exp(trace, path_to_file, '/PyMoDAQFemto/DataIn/Trace/Data00')
 
+            # Processing settings
+            for child in putils.iter_children_params(self.settings.child("processing"), childlist=[]):
+                path = ["processing"]
+                path.extend(self.settings.child("processing").childPath(child))
+                self.settings.child(*path).setValue(saved_param.child('dataIN_settings', *path).value())
+            # Retrieving settings
+            for child in putils.iter_children_params(self.settings.child("retrieving"), childlist=[]):
+                path = ["retrieving"]
+                path.extend(self.settings.child("retrieving").childPath(child))
+                self.settings.child(*path).setValue(saved_param.child('dataIN_settings', *path).value())
 
 class RetrieverWorker(QObject):
     result_signal = Signal(SimpleNamespace)
@@ -2457,7 +2462,7 @@ def main():
 
     app = QtWidgets.QApplication(sys.argv)
     win = QtWidgets.QMainWindow()
-    area = gutils.DockArea()
+    area = DockArea()
     win.setCentralWidget(area)
     win.resize(1000, 500)
     win.setWindowTitle("PyMoDAQ Retriever")

@@ -8,7 +8,7 @@ from pathlib import Path
 from pymodaq_data.data import DataSource
 
 
-def convert_numpy_to_pymodaq_femto(
+def convert_numpy_to_pymodaq_femto_trace(
     output_file: str,
     trace: np.ndarray,
     parameter_axis: np.ndarray,
@@ -64,3 +64,50 @@ def convert_numpy_to_pymodaq_femto(
     datasaver.add_data(trace_group, measured_data)
     h5saver.close_file()
 
+
+def convert_numpy_to_pymodaq_femto_fundamental(
+    output_file: str,
+    spectrum: np.ndarray,
+    wavelength_axis: np.ndarray
+) -> None:
+    """
+    Convert a measured fundamental spectrum (saved as numpy arrays) to a h5 file readable by PyMoDAQ-Femto.
+
+    This function takes a numpy array representing a measured spectrum, along with its wavelength axis,
+    and saves the data into an HDF5 file format compatible with PyMoDAQ-Femto.
+
+    All quantities (wavelength, etc.) must be expressed in standard SI units (meters).
+
+    Parameters
+    ----------
+    spectrum : numpy.ndarray
+        The 1D array representing the measured spectrum data.
+    wavelength_axis : numpy.ndarray
+        The 1D array representing the wavelength axis, in SI units (meters).
+    output_file : str
+        Path to the output HDF5 file where the converted data will be saved.
+
+    Notes
+    -----
+    - The function initializes an HDF5 file using `H5SaverLowLevel` and organizes the data
+      into groups for compatibility with PyMoDAQ-Femto.
+    - The `DataSaverLoader` is used to manage the saving process.
+    """
+
+    # Create saver
+    h5saver = H5SaverLowLevel(save_type=SaveType.custom)
+    h5saver.init_file(file_name=Path(output_file),
+                      raw_group_name='PyMoDAQFemto', new_file=True)
+    datasaver = DataSaverLoader(h5saver)
+    data_in_group = h5saver.get_set_group(h5saver.raw_group, "DataIn")
+    spectrum_group = h5saver.get_set_group(data_in_group, "FundamentalSpectrum")
+
+    # store data into high level object
+    measured_spectrum = DataWithAxes("Measured Spectrum", source=DataSource.raw,
+                                     data=[spectrum],
+                                     axes=[Axis(data=wavelength_axis, label="Wavelength", units="m", index=0)],
+                                     nav_indexes=(0,))
+
+    # add it to file
+    datasaver.add_data(spectrum_group, measured_spectrum)
+    h5saver.close_file()

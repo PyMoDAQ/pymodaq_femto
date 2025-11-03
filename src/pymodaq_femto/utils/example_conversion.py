@@ -22,6 +22,8 @@ the wavelength axis is in meters.
 !! Make sure to select the proper options in the retriever GUI when using the trace! (especially, nlprocess = pg)
 """
 
-from pymodaq_femto.converter import convert_numpy_to_pymodaq_femto
+from pymodaq_femto.converter import convert_numpy_to_pymodaq_femto_trace
+from pymodaq_femto.converter import convert_numpy_to_pymodaq_femto_fundamental
 
-convert_numpy_to_pymodaq_femto("converted_trace.h5", trace, delay, wavelength, parameter_units="s")
+convert_numpy_to_pymodaq_femto_trace("converted_trace.h5", trace, delay, wavelength, parameter_units="s")
+convert_numpy_to_pymodaq_femto_fundamental("converted_fundamental.h5", spectrum, spectrum_wavelength)

@@ -12,7 +12,7 @@ from qtpy.QtGui import QIcon, QPixmap
 from qtpy.QtGui import QTextCursor
 
 from scipy.fftpack import next_fast_len
-from scipy.interpolate import splrep, BSpline, interp1d
+from scipy.interpolate import interp1d
 from collections import OrderedDict
 from types import SimpleNamespace
 from pathlib import Path
@@ -23,25 +23,24 @@ from pyqtgraph.parametertree import Parameter, ParameterTree
 from pymodaq_utils import utils as utils
 from pymodaq_utils.math_utils import my_moment, linspace_step
 from pymodaq_utils.logger import set_logger, get_module_name, get_base_logger
-from pymodaq_utils.config import Config
+from pymodaq_utils.config import GlobalConfig
 
 from pymodaq_gui.utils import DockArea
 from pymodaq_gui.parameter import utils as putils, ioxml
 from pymodaq_gui.h5modules.browsing import browse_data
-from pymodaq_gui.h5modules.browsing import H5BrowserUtil, H5Browser
+from pymodaq_gui.h5modules.browsing import H5BrowserUtil
 from pymodaq_gui.h5modules.saving import H5SaverLowLevel
 from pymodaq_gui.utils.file_io import select_file
 from pymodaq_gui.plotting.data_viewers.viewer1D import Viewer1D
 from pymodaq_gui.plotting.data_viewers.viewer2D import Viewer2D
-from pymodaq_gui.plotting.utils.plot_utils import RoiInfo
+from pymodaq_gui.plotting.items.roi import RoiInfo, LinearROI
 from pymodaq_gui.managers.action_manager import QAction
-from pymodaq_gui.managers.roi_manager import LinearROI
 
 from pymodaq_data.data import Axis, DataWithAxes, DataSource
 from pymodaq_data.h5modules.data_saving import DataLoader, DataSaverLoader
 
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData, random_gaussian
-from pypret.frequencies import om2wl, wl2om, convert
+from pypret.frequencies import wl2om, convert
 from pypret.retrieval.retriever import _RETRIEVER_CLASSES
 
 
@@ -53,14 +52,25 @@ from pymodaq_femto.graphics import (
     PulsePlot,
     PulsePropagationPlot,
 )
-from pymodaq_femto.simulator import Simulator, methods, nlprocesses, materials, dscan_removed_message
+from pymodaq_femto.simulator import Simulator, materials, dscan_removed_message
 
 from pymodaq_femto import _PNPS_CLASSES
 import pymodaq_femto.materials
 
 retriever_algos = list(_RETRIEVER_CLASSES.keys())
 
-config = Config()
+
+def unlock_aspect_ratio(viewer: Viewer2D):
+    """Let both axes of a Viewer2D scale independently (e.g. nm vs fs)
+
+    Sets the aspect_ratio action unchecked explicitly: calling trigger() on it toggles its state,
+    so the axes would end up locked every other time.
+    """
+    viewer.get_action('aspect_ratio').setChecked(False)
+    viewer.view.lock_aspect_ratio()
+
+
+config = GlobalConfig()
 logger = set_logger(get_module_name(__file__))
 
 materials_propagation = []
@@ -808,7 +818,7 @@ class Retriever(QObject):
         logger.info("Initializing Retriever Extension")
         super().__init__()
 
-        self.h5utils = H5BrowserUtil()
+        self.h5utils = H5BrowserUtil(backend=config("data", "data_saving", "backend")[0])
 
         self.dockarea = dockarea
         self.dashboard = dashboard
@@ -1044,10 +1054,7 @@ class Retriever(QObject):
         self.viewer_live_trace.set_gradient('red', gradient="femto")
         for key in ['red', 'green', 'blue']:  # Hides all RGB controls (not needed for a trace)
             self.viewer_trace_in.get_action(key).setVisible(False)
-        self.viewer_live_trace.get_action('aspect_ratio').setChecked(False)
-        self.viewer_live_trace.get_action('aspect_ratio').trigger()
-        self.viewer_live_trace.get_action('aspect_ratio').trigger()
-        # self.viewer_trace_in.get_action('aspect_ratio').setVisible(False) #Disable aspect ratio
+        unlock_aspect_ratio(self.viewer_live_trace)
 
         self.viewer_live_time = Viewer1D()
         self.viewer_live_lambda = Viewer1D()
@@ -1346,7 +1353,10 @@ class Retriever(QObject):
 
         # Otherwise open the dialog box
         else:
+            # select the file ourselves: browse_data's default start path uses a config key
+            # that no longer exists in pymodaq >= 5.2
             spectrum, fname, node_path = browse_data(
+                fname=str(select_file(save=False, ext="h5")),
                 ret_all=True,
                 message="Select the node corresponding to the" "Fundamental Spectrum",
             )
@@ -1467,12 +1477,13 @@ class Retriever(QObject):
 
             else:
                 trace, fname, node_path = browse_data(
+                    fname=str(select_file(save=False, ext="h5")),
                     ret_all=True,
                     message="Select the node corresponding to the"
                             "Characterization Trace",
                 )
 
-            if fname != "":
+            if fname != "" and trace is not None:  # otherwise the user pressed cancel
                 self.save_file_pathname = fname
                 self.settings.child("data_in_info", "loaded_file").setValue(fname)
                 self.settings.child("data_in_info", "loaded_node").setValue(node_path)
@@ -1553,8 +1564,8 @@ class Retriever(QObject):
         self.ui.dock_data_in.raiseDock()
         self.viewer_trace_in.show_data(self.data_in['raw_trace'])
         self.viewer_trace_in.get_action('autolevels').trigger()  # Auto scale colormap
-        self.viewer_trace_in.get_action('aspect_ratio').trigger()
-        self.viewer_trace_in.get_action('aspect_ratio').setVisible(False) #Disable aspect ratio
+        unlock_aspect_ratio(self.viewer_trace_in)
+        self.viewer_trace_in.get_action('aspect_ratio').setVisible(False)
 
         for key in ['red', 'green', 'blue']:  # Hides all RGB controls (not needed for a trace)
             # if not key == 'red': self.viewer_trace_in.get_action(key).trigger()

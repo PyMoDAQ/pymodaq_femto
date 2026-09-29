@@ -2,7 +2,7 @@
 import numpy as np
 from pymodaq_gui.h5modules.saving import H5SaverLowLevel
 from pymodaq_data.h5modules.data_saving import DataSaverLoader
-from pymodaq.utils.data import Axis, DataWithAxes
+from pymodaq_data.data import Axis, DataWithAxes
 from pymodaq_data.h5modules.backends import SaveType
 from pathlib import Path
 from pymodaq_data.data import DataSource

@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.ticker import EngFormatter
 from pypret import Pulse, lib
-from pypret.frequencies import convert, om2wl, wl2om
+from pypret.frequencies import convert, wl2om
 from pypret.graphics import plot_complex, plot_meshdata
 import math
 

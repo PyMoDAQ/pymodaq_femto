@@ -3,12 +3,12 @@ from qtpy import QtWidgets
 
 from pathlib import Path
 from pyqtgraph.parametertree import Parameter, ParameterTree
-from pypret.frequencies import om2wl, wl2om, convert
+from pypret.frequencies import wl2om, convert
 from pypret import FourierTransform, Pulse, PNPS, lib, MeshData
 
 import numpy as np
 from pymodaq_data.data import Axis
-from pymodaq_utils.math_utils import gauss1D, my_moment, linspace_step, normalize
+from pymodaq_utils.math_utils import gauss1D, linspace_step, normalize
 from pymodaq_utils.units import l2w
 from pymodaq_utils.array_manipulation import linspace_this_image, crop_vector_to_axis, crop_array_to_axis,\
 linspace_this_vect
@@ -17,7 +17,6 @@ from pymodaq_femto.materials import FS
 from pymodaq_femto.graphics import MplCanvas, NavigationToolbar, MeshDataPlot, PulsePlot
 from collections import OrderedDict
 from pymodaq_femto import _PNPS_CLASSES
-from pymodaq_gui.parameter import utils as putils
 
 
 methods_tmp = list(_PNPS_CLASSES.keys())

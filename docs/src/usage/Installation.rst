@@ -10,45 +10,71 @@ Installation
 
 .. highlight:: console
 
-For PyMoDAQ-Femto to run smoothly, you need a Python distribution to be installed. Here are some advices.
-On all platforms **Windows**, **MacOS** or **Linux**, `Anaconda`__ or `Miniconda`__ is the advised distribution/package
-manager. Environments can be created to deal with different version of packages and isolate the code from other
-programs. Anaconda comes with a full set of installed scientific python packages while *Miniconda* is a very
-light package manager.
+Requirements
+------------
 
-__ https://www.anaconda.com/download/
+PyMoDAQ-Femto runs on **Windows**, **MacOS** and **Linux**, and requires Python 3.10 or later (it is tested with
+Python 3.14). We advise to install it with `Miniconda`__ (a light package manager) or `Anaconda`__, in a dedicated
+environment: this isolates PyMoDAQ-Femto and its dependencies from your other Python programs.
+
 __ https://docs.conda.io/en/latest/miniconda.html
+__ https://www.anaconda.com/download/
+
+PyMoDAQ-Femto 5.2 is compatible with PyMoDAQ 5.2. Versions compatible with PyMoDAQ 3 or 4 are archived in the
+legacy_v3 and v4 branches of the `GitHub repository`__.
+
+__ https://github.com/PyMoDAQ/pymodaq_femto
 
 Setting up a new environment
 ----------------------------
 
-* Download and install Miniconda3.
-* Open a console, and cd to the location of the *condabin* folder, for instance: ``C:\Miniconda3\condabin``
-* Create a new environment: ``conda create -n my_env python=3.8``, where my_env is your new environment name. This will create the environment with python version 3.8
-  that is currently the recommended one.
-* Activate your environment so that only packages installed within this environment will be *seen* by Python:
-  ``conda activate my_env``
+* Download and install Miniconda.
+* Open a console (on Windows, the *Anaconda Prompt*).
+* Create a new environment called *pymodaq_femto* (any name will do) with a recent Python version::
+
+    conda create -n pymodaq_femto python=3.14
+
+* Activate it, so that only the packages installed within this environment are *seen* by Python::
+
+    conda activate pymodaq_femto
 
 Installing PyMoDAQ-Femto
 ------------------------
 
-Easiest part: in your newly created and activated environment enter: ``pip install pymodaq_femto``. This will install the
-latest PyMoDAQ-Femto available version and all its dependencies. For a specific version
-enter:  ``pip install pymodaq_femto==x.y.z``.
+In your activated environment, enter::
+
+    pip install pymodaq_femto
+
+This installs the latest version of PyMoDAQ-Femto and all its dependencies. For a specific version, enter
+``pip install pymodaq_femto==x.y.z``.
+
+PyMoDAQ-Femto does not need the full PyMoDAQ package: it only relies on three of its sub-packages
+(``pymodaq_utils``, ``pymodaq_data`` and ``pymodaq_gui``), which are pinned to the versions it has been tested with.
+The other dependencies are ``pypret_pymodaq`` (the retrieval algorithms), ``numpy``, ``scipy``, ``matplotlib`` and
+``PyQt5``.
+
+To also use the Retriever as an extension of the PyMoDAQ dashboard, install the ``dashboard`` option, which adds the
+full PyMoDAQ package::
+
+    pip install "pymodaq_femto[dashboard]"
+
+For development, clone the repository and install it in editable mode::
+
+    git clone https://github.com/PyMoDAQ/pymodaq_femto.git
+    cd pymodaq_femto
+    pip install -e .
 
   .. _run_module:
 
 Launching PyMoDAQ-Femto
----------------------------------
+-----------------------
 
-During its installation, two scripts have been installed within you environment directory,
-this means you can start PyMoDAQ-Femto’s two main functionalities directly writing in your console either:
+The installation creates two commands in your environment. With the environment activated, enter either:
 
 *  ``simulator``
 *  ``retriever``
 
-Alternatively, you can specify the full commands (The *-m* option tells python to look within its *site-packages* folder, where you've just
-installed pymodaq_femto):
+Alternatively, you can use the full commands:
 
 *  ``python -m pymodaq_femto.simulator``
 *  ``python -m pymodaq_femto.retriever``
@@ -58,22 +84,16 @@ installed pymodaq_femto):
 Creating shortcuts on **Windows**
 ---------------------------------
 
-Python packages can easily be started from the command line (see :ref:`run_module`). However, Windows users
-will probably prefer using shortcuts on the desktop. Here is how to do it (Thanks to Christophe Halgand for the procedure):
+Windows users may prefer to start PyMoDAQ-Femto from a shortcut on the desktop
+(thanks to Christophe Halgand for the procedure):
 
-* First create a shortcut (see :numref:`shortcut_create`) on your desktop (pointing to any file or program, it doesn't matter)
-* Right click on it and open its properties (see :numref:`shortcut_prop`)
-* On the *Start in* field ("Démarrer dans" in french and in the figure), enter the path to the condabin folder of your miniconda or
-  anaconda distribution, for instance: ``C:\Miniconda3\condabin``
-* On the *Target* field, ("Cible" in french and in the figure), enter this string:
-  ``C:\Windows\System32\cmd.exe /k conda activate my_env & python -m pymodaq_femto.retriever``. This means that
-  your shortcut will open the windows's command line, then execute your environment activation (*conda activate my_env* bit),
-  then finally execute and start **Python**, opening the correct pymodaq_femto file (here *retriever.py*,
-  starting the Retriever module, *python -m pymodaq_femto.retriever* bit)
-* You're done!
-* Do it again for each PyMoDAQ-Femto's module you want (to get the correct python file and it's path, see :ref:`run_module`).
-
-
+* Create a shortcut on your desktop, pointing to any file or program (see :numref:`shortcut_create`).
+* Right click on it and open its properties (see :numref:`shortcut_prop`).
+* In the *Start in* field, enter the path to the *condabin* folder of your Miniconda or Anaconda installation,
+  for instance ``C:\Miniconda3\condabin``.
+* In the *Target* field, enter ``C:\Windows\System32\cmd.exe /k conda activate pymodaq_femto & retriever``.
+  The shortcut opens a console, activates your environment, then starts the Retriever.
+* Repeat with ``simulator`` instead of ``retriever`` to create a shortcut for the Simulator.
 
    .. _shortcut_create:
 
@@ -87,4 +107,4 @@ will probably prefer using shortcuts on the desktop. Here is how to do it (Thank
 .. figure:: /image/installation/shortcut_prop.PNG
    :alt: shortcut properties
 
-   Shortcut properties
+   Shortcut properties (here with the older *python -m* command)

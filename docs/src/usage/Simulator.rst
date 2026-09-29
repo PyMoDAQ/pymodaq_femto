@@ -47,8 +47,8 @@ Description of parameters
   If set to ``From File``, an external CSV file will be used. The CSV file must contain in columns: Wavelength (nm), Normalized Spectral Intensity and Phase in radians.
   A default file (`spectral_data.csv`) is supplied in the plugin.
 
+.. _pulse_settings:
 
-  .. _pulse_settings:
 **Pulse Settings:**
  * FWHM (fs): ``(type: float)`` Temporal full width at half maximum in femtoseconds.
  * Shaping type: ``(type: list, values: Taylor or Gaussian)`` The phase is either defined as a Taylor series in the spectral domain, or as a Gaussian in the temporal domain.
@@ -58,7 +58,6 @@ Description of parameters
  * Gaussian Phase: ``(type: group)`` Amplitude and full-width at half maximum of the Gaussian temporal phase.
  * Data File: ``(type: browsepath)`` Path to the user-supplied file if Pulse Source is set to ``From File``.
 
-  .. _algo_settings:
 .. |ss| raw:: html
 
     <strike>
@@ -66,6 +65,8 @@ Description of parameters
 .. |se| raw:: html
 
     </strike>
+
+.. _algo_settings:
 
 **Algorithm Options:**
  * Method: ``(type: list)`` The type of measurement (FROG, MIIPS, etc.). See :ref:`available_methods` for a full list of available methods.

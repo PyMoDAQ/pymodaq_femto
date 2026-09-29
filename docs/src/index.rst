@@ -31,7 +31,7 @@ Information
 
 GitHub repo: https://github.com/PyMoDAQ/pymodaq_femto
 
-Documentation: http://pymodaq_femto.cnrs.fr/
+Documentation: https://pymodaq-femto.readthedocs.io/en/latest/index.html
 
 Based on PyMoDAQ, the `pypret`__ library and the ``pyqtgraph`` library.
 

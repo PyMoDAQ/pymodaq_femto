@@ -12,7 +12,7 @@ Launching the retriever as a stand-alone program:
  * Open a shell (for instance, Anaconda Prompt) with the correct conda environment activated
  * Type ``retriever``
 
-Launching the retriever from a `PyMoDAQ Dashboard <http://pymodaq.cnrs.fr/en/latest/usage/modules/DashBoard.html#dashboard-module>`__:
+Launching the retriever from a `PyMoDAQ Dashboard <https://pymodaq.cnrs.fr/en/latest/modules/DashBoard.html>`__:
 
  * Load your dashboard
  * In the top bar menu, go to Extensions/FemtoRetriever
@@ -67,7 +67,7 @@ Data measured using PyMoDAQ
 .. |load_trace| image:: /image/load_trace.png
 .. |load_spectrum| image:: /image/load_spectrum.png
 
-If your data was measured using PyMoDAQ `Scan function <http://pymodaq.cnrs.fr/en/pymodaq-dev/usage/modules/DAQ_Scan.html>`__, then we have good news for you: they already have the proper formatting and will seamlessly load into PyMoDAQ-Femto!
+If your data was measured using PyMoDAQ `Scan function <https://pymodaq.cnrs.fr/en/latest/extensions_folder/daq_scan/daq_scan.html>`__, then we have good news for you: they already have the proper formatting and will seamlessly load into PyMoDAQ-Femto!
 
 To load the trace, click the |load_trace| *Load Experimental Trace* icon, and navigate to your .h5 file. It will open your file in H5Browser. Select the Data node corresponding to the trace and double-click it.
 Lineouts of the trace will be displayed as shown below. Then, click OK to load the trace.
@@ -86,72 +86,68 @@ Converting raw data to be used in the retriever
 """""""""""""""""""""""""""""""""""""""""""""""
 
 If the non-linear trace was measured using another acquisition program than PyMoDAQ, we are slightly disappointed but will nonetheless explain how to convert it
-the proper format before being loaded into the retriever. PyMoDAQ-Femto uses a binary format known as hdf5__, as described in the PyMoDAQ documentation__.
+to the proper format before loading it into the retriever. PyMoDAQ-Femto uses a binary format known as hdf5__, as described in the PyMoDAQ documentation__.
 
 __ https://www.hdfgroup.org/solutions/hdf5/
-__ https://pymodaq.readthedocs.io/en/latest/usage/saving.html
+__ https://pymodaq.cnrs.fr/en/latest/data_management/saving_loading_data.html
 
-We provide an example script to convert raw data, located inside the PyMoDAQ-Femto module, under :file:`pymodaq_femto/utils/convert_to_pymodaq_compatible.py`.
+If it is not already the case, raw data should first be converted to numpy arrays. 5 arrays are needed:
 
-If you are using **conda** with a dedicated environment as suggested in the :ref:`section_installation` section, this folder will be located inside the :file:`site-packages` folder, for instance in Windows something like:
-:file:`C:/Miniconda/envs/your_environment_name/Lib/site-packages/pymodaq_femto`
-This :file:`/utils` folder is also easily accessible on GitHub__.
-If it is not already the case, raw data should be converted to numpy arrays. 5 arrays are needed:
-
-* The 2D trace     [N x M numpy array]
-* An array corresponding to the parameter axis (delay in Frog, glass insertion in Dscan, etc.) in physical units [N x 1 numpy array]
-* An array with the wavelength axis of the trace [M x 1 numpy array]
-* The fundamental spectrum (spectrum of light before non-linear conversion) [P x 1 numpy array]
-* The wavelength axis of the fundamental spectrum  [P x 1 numpy array]
-
-.. note::
-    The retriever has an option to rescale any input array, so parameter or wavelength axes can be saved in any units. That being said, it is usually easier to save all data in standard units everytime (meters for wavelengths and insertions, seconds for delays, etc.).
+* The 2D trace [N x M numpy array]
+* The parameter axis (delay in FROG, glass insertion in DScan, etc.) [N numpy array]
+* The wavelength axis of the trace [M numpy array]
+* The fundamental spectrum (spectrum of light before non-linear conversion) [P numpy array]
+* The wavelength axis of the fundamental spectrum [P numpy array]
 
 The fundamental spectrum doesn't need to be on the same wavelength axis as the 2D trace, they will get interpolated on a common axis during retrieval.
 The role of the fundamental is to compare retrieved spectrum with measured one (a good measure of the quality of retriever), and can also be used as an initial guess for the algorithm. But if you don't have one for every trace, just use any spectrum you have and the algorithm will still work.
 
-__ https://github.com/CEMES-CNRS/pymodaq_femto/tree/main/src/pymodaq_femto/utils
+The :file:`pymodaq_femto/converter.py` module then provides two functions to save these arrays into .h5 files that
+can be loaded into the retriever:
 
-Once the 5 numpy arrays are loaded, you can use the utility functions of :file:`pymodaq_femto/utils/convert_to_pymodaq_compatible.py` to create a new .h5 file
-and add all data to it, with the proper structure.
+* ``convert_numpy_to_pymodaq_femto_trace(output_file, trace, parameter_axis, wavelength_axis, parameter_units="s")``
+  saves the trace and its axes. ``parameter_units`` is the unit of the parameter axis: ``"s"`` for a delay,
+  ``"m"`` for a glass insertion.
+* ``convert_numpy_to_pymodaq_femto_fundamental(output_file, spectrum, wavelength_axis)`` saves the fundamental
+  spectrum and its wavelength axis.
+
+.. note::
+    Both functions expect all axes in SI units: meters for wavelengths and insertions, seconds for delays.
+    If your data uses other units, you can either convert the axes before saving, or correct them afterwards with the
+    scaling options of the retriever (see :ref:`method_and_scaling`).
 
 *Example:*
-One raw DScan measurement (not measured with PyMoDAQ) is provided in :file:`pymodaq_femto/utils/raw_scans/example_measured_dscan_to_convert.h5`. The 5 numpy arrays are stored in there.
-The example file :file:`pymodaq_femto/utils/convert_to_pymodaq_compatible.py` converts this file into a PyMoDAQ-Femto-compatible h5 file.
+The script :file:`pymodaq_femto/utils/example_conversion.py` converts an example PG-FROG trace and its fundamental
+spectrum, stored as numpy arrays in :file:`example_trace_numpy.npz` and :file:`example_fundamental_numpy.npz` in the
+same folder. Once the arrays are loaded, the conversion only takes two lines::
 
-The file is loaded, and the 5 numpy arrays are extracted::
+    from pymodaq_femto.converter import convert_numpy_to_pymodaq_femto_trace
+    from pymodaq_femto.converter import convert_numpy_to_pymodaq_femto_fundamental
 
-    parameter_axis = measured_dscan.axes[0]
-    spectrum_trace_axis = measured_dscan.axes[1]
-    spectrum_fundamental_intensity = raw_spectrum.intensity
-    spectrum_fundamental_axis_wavelength = raw_spectrum.wl
-    trace_data = measured_dscan.data
+    convert_numpy_to_pymodaq_femto_trace("converted_trace.h5", trace, delay, wavelength, parameter_units="s")
+    convert_numpy_to_pymodaq_femto_fundamental("converted_fundamental.h5", spectrum, spectrum_wavelength)
 
-Since this example is a DScan trace, the parameter is the insertion of glass in the beam, expressed in meters.
-For a FROG trace, the parameter would be the time delay between two pulses, in seconds.
+Then, in the retriever:
 
-Then the script initializes a new .h5 file and gives it the correct structure::
+* click the |load_trace| *Load Experimental Trace* icon, open :file:`converted_trace.h5` and select the node
+  :file:`/PyMoDAQFemto/DataIn/Trace/Data00`,
+* click the |load_spectrum| *Load Experimental Spectrum* icon, open :file:`converted_fundamental.h5` and select the
+  node :file:`/PyMoDAQFemto/DataIn/FundamentalSpectrum/Data00`,
+* set the method and non-linear process corresponding to your measurement (for the example: FROG with the *pg*
+  process, see :ref:`method_and_scaling`).
 
-    saver = PyMoDAQFemtoCustomSaver()
+If you installed PyMoDAQ-Femto with **conda** as suggested in the :ref:`section_installation` section, the
+:file:`utils` folder is located inside the :file:`site-packages` folder of your environment, for instance on Windows:
+:file:`C:/Miniconda3/envs/pymodaq_femto/Lib/site-packages/pymodaq_femto/utils`.
+It is also available on GitHub__.
 
-    # Open file and create scan node
-    saver.init_file(addhoc_file_path=str(pathToSave.joinpath(fileName)), update_h5=True)
-    scannode = saver.add_scan_group()
-    scannode.set_attr('scan_type', "Scan1D")
-
-And finally we add data to it, using the convenience functions::
-
-    # Add all data
-    saver.add_exp_parameter(scannode, parameter_axis, label='Insertion', units='m')
-    saver.add_exp_trace(scannode, trace_data, spectrum_trace_axis)
-    saver.add_exp_fundamental(scannode, spectrum_fundamental_intensity, spectrum_fundamental_axis_wavelength)
-    saver.close_file()
-
-The script should save a converted file into :file:`pymodaq_femto/utils/converted_scans/`, that can be directly loaded into the retriever.
+__ https://github.com/PyMoDAQ/pymodaq_femto/tree/main/src/pymodaq_femto/utils
 
 
 Pre-processing data
 --------------------
+.. _method_and_scaling:
+
 Method definition and data rescaling
 ************************************
 Once the data is loaded, the parameter tree on the right of the interface gets populated with several values.
@@ -255,7 +251,7 @@ Following the retrieval
 Press :guilabel:`Start Retrieval` in the *Retrieving* group of the parameter tree to start the algorithm, and
 :guilabel:`Stop Retrieval` to interrupt it. The *Retriever* tab is updated at each iteration and shows:
 
-* the trace computed from the current guess of the pulse (left),
+* the error computed from the current guess of the pulse (left),
 * the current guess of the pulse in the time domain (top) and versus wavelength (bottom),
 * a text box where, if *Verbose Info* is ticked, the trace error is written at each iteration. The lower the error,
   the better the retrieved trace matches the measured one.

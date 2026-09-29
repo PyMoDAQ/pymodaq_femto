@@ -13,12 +13,11 @@ Documentation can be found here: https://pymodaq-femto.readthedocs.io/en/latest/
 Compatibility
 =============
 
-The code on the ``main`` branch is compatible with **PyMoDAQ 5.2**. It only relies on three PyMoDAQ sub-packages,
+PyMoDAQ Femto 5.2.0 is compatible with **PyMoDAQ 5.2**. It only relies on three PyMoDAQ sub-packages,
 pinned to the versions it has been tested with (see Dependencies below): the full ``pymodaq`` package is not needed
 to use PyMoDAQ Femto on its own.
 
-The latest release on PyPI (5.1.0) does **not** work with PyMoDAQ 5.2 or later: until the next release, install
-PyMoDAQ Femto from this repository (see Installation below).
+PyMoDAQ Femto 5.1.0 is compatible with PyMoDAQ 5.1 only: it does **not** work with PyMoDAQ 5.2 or later.
 
 Versions of PyMoDAQ Femto compatible with PyMoDAQ 3 or 4 are archived in the other branches of this repository
 (legacy_v3 and v4).
@@ -31,12 +30,8 @@ conda environment::
 
     conda create -n pymodaq_femto python=3.14
     conda activate pymodaq_femto
-    pip install git+https://github.com/PyMoDAQ/pymodaq_femto.git
+    pip install pymodaq_femto
 
-To also use the Retriever as an extension of the PyMoDAQ dashboard, install the optional ``dashboard`` extra,
-which adds the full ``pymodaq`` package::
-
-    pip install "pymodaq_femto[dashboard] @ git+https://github.com/PyMoDAQ/pymodaq_femto.git"
 
 For development, clone the repository and install it in editable mode::
 
@@ -87,6 +82,6 @@ and used in PyMoDAQ Femto.
 License
 =======
 
-Published under the CeCILL-B FREE SOFTWARE LICENSE
+Published under the MIT license (see the LICENSE file).
 
 GitHub repo: https://github.com/PyMoDAQ/pymodaq_femto

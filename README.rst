@@ -13,7 +13,7 @@ Documentation can be found here: https://pymodaq-femto.readthedocs.io/en/latest/
 Compatibility
 =============
 
-PyMoDAQ Femto 5.2.0 is compatible with **PyMoDAQ 5.2**. It only relies on three PyMoDAQ sub-packages,
+PyMoDAQ Femto 5.2.1 is compatible with **PyMoDAQ 5.2**. It only relies on three PyMoDAQ sub-packages,
 pinned to the versions it has been tested with (see Dependencies below): the full ``pymodaq`` package is not needed
 to use PyMoDAQ Femto on its own.
 

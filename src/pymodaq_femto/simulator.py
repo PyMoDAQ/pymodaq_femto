@@ -17,6 +17,8 @@ from pymodaq_femto.materials import FS
 from pymodaq_femto.graphics import MplCanvas, NavigationToolbar, MeshDataPlot, PulsePlot
 from collections import OrderedDict
 from pymodaq_femto import _PNPS_CLASSES
+# imported for its side effect: registers pymodaq's custom parameter types (e.g. 'browsepath') in pyqtgraph
+import pymodaq_gui.parameter  # noqa: F401
 
 
 methods_tmp = list(_PNPS_CLASSES.keys())
@@ -349,7 +351,7 @@ class Simulator(QObject):
 
         if self.settings.child('plot_settings', 'setlimits').value():
             lims = np.array([self.settings.child('plot_settings', 'limit_min').value(),
-                             self.settings.child('plot_settings', 'limit_max').value()])
+                             self.settings.child('plot_settings', 'limit_max').value()], dtype=float)
             if self.settings.child('plot_settings', 'units').value() == 'nm':
                 lims *= 1e-9
             else:
